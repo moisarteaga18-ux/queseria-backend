@@ -2,17 +2,27 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const { verificarToken } = require('./middleware/auth');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Rutas
-app.use('/api/leche', require('./routes/leche'));
-app.use('/api/produccion', require('./routes/produccion'));
-app.use('/api/ventas', require('./routes/ventas'));
-app.use('/api/precios', require('./routes/precios'));
-app.use('/api/resumen', require('./routes/resumen'));
+// Ruta pública de bienvenida
+app.get('/', (req, res) => {
+  res.json({ ok: true, mensaje: '🧀 API Quesería funcionando' });
+});
+
+// Ruta de autenticación (NO requiere token)
+app.use('/api/auth', require('./routes/auth'));
+
+// Todas las demás rutas requieren token (usuario logueado)
+app.use('/api/leche', verificarToken, require('./routes/leche'));
+app.use('/api/produccion', verificarToken, require('./routes/produccion'));
+app.use('/api/ventas', verificarToken, require('./routes/ventas'));
+app.use('/api/precios', verificarToken, require('./routes/precios'));
+app.use('/api/resumen', verificarToken, require('./routes/resumen'));
+app.use('/api/rendimiento', verificarToken, require('./routes/rendimiento'));
 
 // Conexión MongoDB Atlas
 mongoose.connect(process.env.MONGODB_URI)
