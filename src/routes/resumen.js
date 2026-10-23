@@ -1,13 +1,30 @@
 const router = require('express').Router();
-const { Leche, Produccion, Venta, Precio } = require('../models');
+const { Leche, Produccion, Venta, Precio, PrecioLeche } = require('../models');
+const { semanaDeFecha, rangoSemana } = require('../utils/semana');
 
-// GET /api/resumen/hoy
+/**
+ * Costo del litro de leche para la semana de [fecha]: el precio que se paga a los ganaderos
+ * (Pagos) y, si no se definió, el costoLitroLeche del precio semanal.
+ */
+async function costoLitroDeSemana(usuarioId, fecha, precio) {
+  const { semana, anio } = semanaDeFecha(fecha);
+  const precioLeche = await PrecioLeche.findOne({ usuarioId, semana, anio });
+  return precioLeche?.precioLitro ?? precio?.costoLitroLeche ?? 0;
+}
+
+// GET /api/resumen/hoy?fecha=yyyy-MM-dd  (la app manda su fecha local; sin ella se usa la del servidor)
 router.get('/hoy', async (req, res) => {
   try {
     const usuarioId = req.usuarioId;
-    const hoy = new Date();
-    const inicio = new Date(hoy.setHours(0,0,0,0));
-    const fin = new Date(hoy.setHours(23,59,59,999));
+    let inicio, fin;
+    if (req.query.fecha) {
+      inicio = new Date(req.query.fecha);
+      fin = new Date(inicio.getTime() + 24 * 60 * 60 * 1000 - 1);
+    } else {
+      const hoy = new Date();
+      inicio = new Date(hoy.setHours(0,0,0,0));
+      fin = new Date(hoy.setHours(23,59,59,999));
+    }
 
     const [leche, produccion, ventas, precioActivo] = await Promise.all([
       Leche.aggregate([
@@ -42,14 +59,21 @@ router.get('/hoy', async (req, res) => {
     const vendidoLibrasEnKg = (totalVendidoLibras[0]?.total || 0) / 2.2046;
     const stockActualKg = parseFloat((producidoTotal - vendidoKg - vendidoLibrasEnKg).toFixed(2));
 
+    const litrosHoy = leche[0]?.totalLitros || 0;
+    const totalVentasHoy = ventas.reduce((sum, v) => sum + v.totalVenta, 0);
+    const costoLecheHoy = parseFloat((litrosHoy * await costoLitroDeSemana(usuarioId, inicio, precioActivo)).toFixed(2));
+
     res.json({
       ok: true,
       data: {
-        litrosHoy: leche[0]?.totalLitros || 0,
+        litrosHoy,
         kgProducidosHoy: produccion[0]?.totalKg || 0,
         stockActualKg,
         ventasHoy: ventas,
-        totalVentasHoy: ventas.reduce((sum, v) => sum + v.totalVenta, 0),
+        totalVentasHoy,
+        numeroVentasHoy: ventas.reduce((sum, v) => sum + v.count, 0),
+        costoLecheHoy,
+        gananciaEstimadaHoy: parseFloat((totalVentasHoy - costoLecheHoy).toFixed(2)),
         precioActivo: precioActivo || null
       }
     });
@@ -95,7 +119,7 @@ router.get('/ganancias', async (req, res) => {
 
       const ingresosTotal = ingresos[0]?.total || 0;
       const litrosComprados = leche[0]?.totalLitros || 0;
-      const costoLitro = precio?.costoLitroLeche || 0;
+      const costoLitro = await costoLitroDeSemana(usuarioId, inicio, precio);
       const costoLeche = parseFloat((litrosComprados * costoLitro).toFixed(2));
       const ganancia = parseFloat((ingresosTotal - costoLeche).toFixed(2));
 
@@ -122,6 +146,52 @@ router.get('/ganancias', async (req, res) => {
       ok: true,
       data: { semanaActual, semanaAnterior, variacion, porcentaje }
     });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// GET /api/resumen/semanas?n=8 — serie de las últimas n semanas ISO (para los gráficos de Reportes)
+router.get('/semanas', async (req, res) => {
+  try {
+    const usuarioId = req.usuarioId;
+    const ObjectId = require('mongoose').Types.ObjectId;
+    const n = Math.min(Math.max(Number(req.query.n) || 8, 1), 26);
+    const actual = semanaDeFecha(req.query.fecha ? new Date(req.query.fecha) : new Date());
+    const lunesActual = rangoSemana(actual.semana, actual.anio).inicio;
+
+    const semanas = [];
+    for (let i = n - 1; i >= 0; i--) {
+      const inicio = new Date(lunesActual.getTime() - i * 7 * 24 * 60 * 60 * 1000);
+      const fin = new Date(inicio.getTime() + 7 * 24 * 60 * 60 * 1000 - 1);
+      const { semana, anio } = semanaDeFecha(inicio);
+      const match = { usuarioId: new ObjectId(usuarioId), fecha: { $gte: inicio, $lte: fin } };
+
+      const [ventas, leche, produccion, precio] = await Promise.all([
+        Venta.aggregate([{ $match: match }, { $group: { _id: null, total: { $sum: '$totalVenta' } } }]),
+        Leche.aggregate([{ $match: match }, { $group: { _id: null, litros: { $sum: '$litros' } } }]),
+        Produccion.aggregate([{ $match: match }, { $group: { _id: null, kg: { $sum: '$kgProducidos' }, litros: { $sum: '$litrosUsados' } } }]),
+        Precio.findOne({ usuarioId, fechaInicio: { $lte: fin }, fechaFin: { $gte: inicio } })
+      ]);
+      const ingresos = ventas[0]?.total || 0;
+      const litros = leche[0]?.litros || 0;
+      const costoLeche = parseFloat((litros * await costoLitroDeSemana(usuarioId, inicio, precio)).toFixed(2));
+      const kg = produccion[0]?.kg || 0;
+      const litrosUsados = produccion[0]?.litros || 0;
+      semanas.push({
+        semana, anio,
+        fechaInicio: inicio,
+        fechaFin: fin,
+        ingresos,
+        litrosLeche: litros,
+        costoLeche,
+        ganancia: parseFloat((ingresos - costoLeche).toFixed(2)),
+        kgProducidos: kg,
+        // Libras de queso por lata (20 L) de leche usada
+        librasPorLata: litrosUsados > 0 ? parseFloat((kg * 2.2046 / (litrosUsados / 20)).toFixed(2)) : 0
+      });
+    }
+    res.json({ ok: true, data: semanas });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }

@@ -23,6 +23,11 @@ app.use('/api/ventas', verificarToken, require('./routes/ventas'));
 app.use('/api/precios', verificarToken, require('./routes/precios'));
 app.use('/api/resumen', verificarToken, require('./routes/resumen'));
 app.use('/api/rendimiento', verificarToken, require('./routes/rendimiento'));
+app.use('/api/productos', verificarToken, require('./routes/productos'));
+app.use('/api/inventario', verificarToken, require('./routes/inventario'));
+app.use('/api/clientes', verificarToken, require('./routes/clientes'));
+app.use('/api/ganaderos', verificarToken, require('./routes/ganaderos'));
+app.use('/api/pagos', verificarToken, require('./routes/pagos'));
 
 // Conexión MongoDB Atlas
 mongoose.connect(process.env.MONGODB_URI)

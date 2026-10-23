@@ -1,35 +1,52 @@
 const router = require('express').Router();
-const { Leche } = require('../models');
+const { Leche, Ganadero } = require('../models');
+const { errorHttp, responderError } = require('../utils/inventario');
+const { textoOpcional } = require('../utils/texto');
 
-// GET /api/leche
+// GET /api/leche?limit=30&fecha=&desde=&hasta=&ganaderoId=
 router.get('/', async (req, res) => {
   try {
-    const { limit = 30, fecha } = req.query;
+    const { limit = 30, fecha, desde, hasta, ganaderoId } = req.query;
     const filter = { usuarioId: req.usuarioId };
     if (fecha) {
       const d = new Date(fecha);
       filter.fecha = { $gte: new Date(d.setHours(0,0,0,0)), $lte: new Date(d.setHours(23,59,59,999)) };
+    } else if (desde || hasta) {
+      filter.fecha = {};
+      if (desde) filter.fecha.$gte = new Date(desde);
+      if (hasta) filter.fecha.$lte = new Date(hasta);
     }
-    const registros = await Leche.find(filter).sort({ fecha: -1 }).limit(Number(limit));
+    if (ganaderoId) filter.ganaderoId = ganaderoId;
+    const registros = await Leche.find(filter).sort({ fecha: -1, createdAt: -1 }).limit(Number(limit));
     res.json({ ok: true, data: registros });
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    responderError(res, e);
   }
 });
 
-// POST /api/leche
+// POST /api/leche  { fecha, litros, ganaderoId, observaciones }
 router.post('/', async (req, res) => {
   try {
-    const { fecha, litros, proveedor, observaciones } = req.body;
+    const { fecha, litros, ganaderoId, observaciones } = req.body;
     if (!litros || litros <= 0) return res.status(400).json({ ok: false, error: 'Litros inválidos' });
+
+    let proveedor = textoOpcional(req.body.proveedor);
+    if (ganaderoId) {
+      const ganadero = await Ganadero.findOne({ _id: ganaderoId, usuarioId: req.usuarioId });
+      if (!ganadero) throw errorHttp(404, 'Ganadero no encontrado');
+      proveedor = ganadero.nombre;
+    }
     const registro = await Leche.create({
       usuarioId: req.usuarioId,
       fecha: fecha || new Date(),
-      litros, proveedor, observaciones
+      litros,
+      ganaderoId: ganaderoId || undefined,
+      proveedor,
+      observaciones: textoOpcional(observaciones)
     });
     res.status(201).json({ ok: true, data: registro });
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    responderError(res, e);
   }
 });
 
@@ -39,7 +56,7 @@ router.delete('/:id', async (req, res) => {
     await Leche.findOneAndDelete({ _id: req.params.id, usuarioId: req.usuarioId });
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    responderError(res, e);
   }
 });
 
