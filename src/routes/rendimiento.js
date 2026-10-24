@@ -1,75 +1,49 @@
 const router = require('express').Router();
 const { Produccion } = require('../models');
-const ObjectId = require('mongoose').Types.ObjectId;
+const { semanaDeFecha, rangoSemana, textoRango, iso } = require('../utils/semana');
 
-function rangoSemanaISO(semana, anio) {
-  const cuatroEnero = new Date(anio, 0, 4);
-  const diaSemana = cuatroEnero.getDay() || 7;
-  const lunes = new Date(cuatroEnero);
-  lunes.setDate(cuatroEnero.getDate() - (diaSemana - 1) + (semana - 1) * 7);
-  const domingo = new Date(lunes);
-  domingo.setDate(lunes.getDate() + 6);
-  return { lunes, domingo };
-}
+const LITROS_POR_LATA = 20;
+const LIBRAS_POR_KG = 2.2046;
+const redondear = (n) => parseFloat(n.toFixed(2));
 
-const MESES = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
-function fmt(fecha, conAnio = false) {
-  const d = fecha.getDate();
-  const m = MESES[fecha.getMonth()];
-  const a = fecha.getFullYear();
-  return conAnio ? `${d} ${m} ${a}` : `${d} ${m}`;
-}
-
-// GET /api/rendimiento/semanal
+// GET /api/rendimiento/semanal — libras de queso por lata, por semana (viernes a jueves)
 router.get('/semanal', async (req, res) => {
   try {
-    const usuarioId = req.usuarioId;
-    const datos = await Produccion.aggregate([
-      { $match: { usuarioId: new ObjectId(usuarioId) } },
-      {
-        $group: {
-          _id: { semana: { $isoWeek: '$fecha' }, anio: { $isoWeekYear: '$fecha' } },
-          totalLitros: { $sum: '$litrosUsados' },
-          totalKg: { $sum: '$kgProducidos' }
-        }
-      },
-      {
-        $addFields: {
-          totalLatas: { $divide: ['$totalLitros', 20] },
-          totalLibras: { $multiply: ['$totalKg', 2.2046] }
-        }
-      },
-      {
-        $addFields: {
-          librasPorLata: { $round: [{ $divide: ['$totalLibras', '$totalLatas'] }, 2] },
-          kgPorLata: { $round: [{ $divide: ['$totalKg', '$totalLatas'] }, 2] }
-        }
-      },
-      { $sort: { '_id.anio': -1, '_id.semana': -1 } },
-      { $limit: 12 }
-    ]);
+    const producciones = await Produccion.find({ usuarioId: req.usuarioId })
+      .select('fecha litrosUsados kgProducidos').lean();
 
-    const semanas = datos.map(d => {
-      const { lunes, domingo } = rangoSemanaISO(d._id.semana, d._id.anio);
-      let rangoTexto;
-      if (lunes.getMonth() === domingo.getMonth()) {
-        rangoTexto = `${lunes.getDate()} – ${fmt(domingo, true)}`;
-      } else {
-        rangoTexto = `${fmt(lunes)} – ${fmt(domingo, true)}`;
-      }
-      return {
-        ...d,
-        rango: {
-          lunes: lunes.toISOString().split('T')[0],
-          domingo: domingo.toISOString().split('T')[0],
-          texto: rangoTexto
-        },
-        etiqueta: `Sem ${d._id.semana} · ${rangoTexto}`
-      };
-    });
+    // Agrupar por semana viernes–jueves (en JS: Mongo solo sabe agrupar por semana ISO)
+    const grupos = new Map();
+    for (const p of producciones) {
+      const { semana, anio } = semanaDeFecha(new Date(p.fecha));
+      const clave = `${anio}-${semana}`;
+      const g = grupos.get(clave) || { _id: { semana, anio }, totalLitros: 0, totalKg: 0 };
+      g.totalLitros += p.litrosUsados || 0;
+      g.totalKg += p.kgProducidos || 0;
+      grupos.set(clave, g);
+    }
+
+    const semanas = [...grupos.values()]
+      .sort((a, b) => (b._id.anio - a._id.anio) || (b._id.semana - a._id.semana))
+      .slice(0, 12)
+      .map(g => {
+        const totalLatas = g.totalLitros / LITROS_POR_LATA;
+        const totalLibras = g.totalKg * LIBRAS_POR_KG;
+        const { inicio, fin } = rangoSemana(g._id.semana, g._id.anio);
+        const texto = textoRango(inicio, fin);
+        return {
+          ...g,
+          totalLatas,
+          totalLibras,
+          librasPorLata: totalLatas > 0 ? redondear(totalLibras / totalLatas) : 0,
+          kgPorLata: totalLatas > 0 ? redondear(g.totalKg / totalLatas) : 0,
+          rango: { inicio: iso(inicio), fin: iso(fin), texto },
+          etiqueta: `Sem ${g._id.semana} · ${texto}`
+        };
+      });
 
     const promedio = semanas.length > 0
-      ? parseFloat((semanas.reduce((s, d) => s + d.librasPorLata, 0) / semanas.length).toFixed(2))
+      ? redondear(semanas.reduce((s, d) => s + d.librasPorLata, 0) / semanas.length)
       : 0;
 
     res.json({
@@ -78,7 +52,7 @@ router.get('/semanal', async (req, res) => {
         semanas,
         promedioLibrasPorLata: promedio,
         mejorSemana: semanas.reduce((b, d) => d.librasPorLata > (b?.librasPorLata || 0) ? d : b, null),
-        peorSemana: semanas.reduce((w, d) => d.librasPorLata < (w?.librasPorLata || 999) ? d : w, null)
+        peorSemana: semanas.reduce((w, d) => d.librasPorLata < (w?.librasPorLata ?? Infinity) ? d : w, null)
       }
     });
   } catch (e) {

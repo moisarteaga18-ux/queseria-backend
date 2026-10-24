@@ -112,22 +112,62 @@ const precioLecheSchema = new mongoose.Schema({
 }, { timestamps: true });
 precioLecheSchema.index({ usuarioId: 1, anio: 1, semana: 1 }, { unique: true });
 
-// ── Pago semanal a un ganadero. Guarda una copia de lo que se pagó ────────────
-const pagoSchema = new mongoose.Schema({
+// ── Descuento al ganadero (se registra durante la semana y se resta en su liquidación) ──
+// tipo: adelanto (plata entregada antes del pago), prestamo (cuota de un préstamo),
+// leche_rechazada (litros devueltos: se descuentan a precio del litro de la semana), otro.
+const descuentoSchema = new mongoose.Schema({
   usuarioId: { type: mongoose.Schema.Types.ObjectId, ref: 'Usuario', required: true, index: true },
-  ganaderoId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ganadero', required: true },
-  nombreGanadero: { type: String },
+  ganaderoId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ganadero', required: true, index: true },
+  fecha: { type: Date, required: true },
+  tipo: { type: String, enum: ['adelanto', 'prestamo', 'leche_rechazada', 'otro'], required: true },
+  valor: { type: Number, min: 0, default: 0 },
+  litros: { type: Number, min: 0 },
+  descripcion: { type: String }
+}, { timestamps: true });
+
+// ── Liquidación semanal (viernes a jueves) de un ganadero ─────────────────────
+// Mientras está pendiente se recalcula con la leche, el precio y los descuentos actuales;
+// al marcarla como pagada queda congelada como comprobante.
+const liquidacionSchema = new mongoose.Schema({
+  usuarioId: { type: mongoose.Schema.Types.ObjectId, ref: 'Usuario', required: true, index: true },
+  numero: { type: Number, required: true },
+  ganaderoId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ganadero', required: true, index: true },
+  nombreGanadero: { type: String, required: true },
+  telefonoGanadero: { type: String },
   semana: { type: Number, required: true },
   anio: { type: Number, required: true },
   fechaInicio: { type: Date, required: true },
   fechaFin: { type: Date, required: true },
+  dias: [{ _id: false, fecha: String, litros: Number, entregas: Number }],
   litros: { type: Number, required: true },
   precioLitro: { type: Number, required: true },
+  subtotal: { type: Number, required: true },
+  descuentos: [{
+    _id: false,
+    descuentoId: mongoose.Schema.Types.ObjectId,
+    tipo: String,
+    fecha: Date,
+    descripcion: String,
+    litros: Number,
+    valor: Number
+  }],
+  totalDescuentos: { type: Number, default: 0 },
   total: { type: Number, required: true },
-  fechaPago: { type: Date, default: Date.now },
+  estado: { type: String, enum: ['pendiente', 'pagado'], default: 'pendiente' },
+  fechaPago: { type: Date },
+  formaPago: { type: String, enum: ['efectivo', 'nequi', 'transferencia'] },
   notas: { type: String }
 }, { timestamps: true });
-pagoSchema.index({ usuarioId: 1, ganaderoId: 1, anio: 1, semana: 1 }, { unique: true });
+liquidacionSchema.index({ usuarioId: 1, ganaderoId: 1, anio: 1, semana: 1 }, { unique: true });
+liquidacionSchema.index({ usuarioId: 1, numero: 1 }, { unique: true });
+
+// ── Contadores por usuario (número consecutivo de liquidaciones) ───────────────
+const contadorSchema = new mongoose.Schema({
+  usuarioId: { type: mongoose.Schema.Types.ObjectId, ref: 'Usuario', required: true },
+  nombre: { type: String, required: true },
+  valor: { type: Number, default: 0 }
+});
+contadorSchema.index({ usuarioId: 1, nombre: 1 }, { unique: true });
 
 module.exports = {
   Leche: mongoose.model('Leche', lecheSchema),
@@ -139,5 +179,7 @@ module.exports = {
   Cliente: mongoose.model('Cliente', clienteSchema),
   Ganadero: mongoose.model('Ganadero', ganaderoSchema),
   PrecioLeche: mongoose.model('PrecioLeche', precioLecheSchema),
-  Pago: mongoose.model('Pago', pagoSchema)
+  Descuento: mongoose.model('Descuento', descuentoSchema),
+  Liquidacion: mongoose.model('Liquidacion', liquidacionSchema, 'liquidaciones'),
+  Contador: mongoose.model('Contador', contadorSchema)
 };

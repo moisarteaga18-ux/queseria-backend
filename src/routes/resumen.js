@@ -1,6 +1,15 @@
 const router = require('express').Router();
 const { Leche, Produccion, Venta, Precio, PrecioLeche } = require('../models');
-const { semanaDeFecha, rangoSemana } = require('../utils/semana');
+const { semanaDeFecha, semanaDeQuery, semanaAnterior: semanaPrevia, rangoSemana, textoRango } = require('../utils/semana');
+
+/**
+ * Precio semanal (queso) de una semana: el registrado con ese número de semana o,
+ * para precios guardados antes del corte viernes–jueves, el que se cruce con sus fechas.
+ */
+async function precioDeSemana(usuarioId, semana, anio, inicio, fin) {
+  return (await Precio.findOne({ usuarioId, semana, anio, fechaInicio: inicio }).sort({ createdAt: -1 }))
+    || Precio.findOne({ usuarioId, fechaInicio: { $lte: fin }, fechaFin: { $gte: inicio } }).sort({ createdAt: -1 });
+}
 
 /**
  * Costo del litro de leche para la semana de [fecha]: el precio que se paga a los ganaderos
@@ -39,7 +48,11 @@ router.get('/hoy', async (req, res) => {
         { $match: { usuarioId: new (require('mongoose').Types.ObjectId)(usuarioId), fecha: { $gte: inicio, $lte: fin } } },
         { $group: { _id: '$tipoVenta', totalVenta: { $sum: '$totalVenta' }, count: { $sum: 1 } } }
       ]),
-      Precio.findOne({ usuarioId, fechaInicio: { $lte: new Date() }, fechaFin: { $gte: new Date() }, activo: true })
+      (() => {
+        const { semana, anio } = semanaDeFecha(inicio);
+        const r = rangoSemana(semana, anio);
+        return precioDeSemana(usuarioId, semana, anio, r.inicio, r.fin);
+      })()
     ]);
 
     const totalProducidoHistorico = await Produccion.aggregate([
@@ -88,23 +101,12 @@ router.get('/ganancias', async (req, res) => {
     const usuarioId = req.usuarioId;
     const ObjectId = require('mongoose').Types.ObjectId;
 
-    // Calcular rango de semana actual y anterior
-    const hoy = new Date();
-    const diaSemana = hoy.getDay() || 7;
-    const lunesActual = new Date(hoy);
-    lunesActual.setDate(hoy.getDate() - (diaSemana - 1));
-    lunesActual.setHours(0, 0, 0, 0);
-    const domingoActual = new Date(lunesActual);
-    domingoActual.setDate(lunesActual.getDate() + 6);
-    domingoActual.setHours(23, 59, 59, 999);
+    // Semana actual (viernes a jueves; ?fecha= es el día local del teléfono) y la anterior
+    const actual = semanaDeQuery(req.query);
+    const anterior = semanaPrevia(actual.semana, actual.anio);
 
-    const lunesAnterior = new Date(lunesActual);
-    lunesAnterior.setDate(lunesActual.getDate() - 7);
-    const domingoAnterior = new Date(lunesActual);
-    domingoAnterior.setDate(lunesActual.getDate() - 1);
-    domingoAnterior.setHours(23, 59, 59, 999);
-
-    async function calcularSemana(inicio, fin) {
+    async function calcularSemana({ semana, anio }) {
+      const { inicio, fin } = rangoSemana(semana, anio);
       const [ingresos, leche, precio] = await Promise.all([
         Venta.aggregate([
           { $match: { usuarioId: new ObjectId(usuarioId), fecha: { $gte: inicio, $lte: fin } } },
@@ -114,7 +116,7 @@ router.get('/ganancias', async (req, res) => {
           { $match: { usuarioId: new ObjectId(usuarioId), fecha: { $gte: inicio, $lte: fin } } },
           { $group: { _id: null, totalLitros: { $sum: '$litros' } } }
         ]),
-        Precio.findOne({ usuarioId, fechaInicio: { $lte: fin }, fechaFin: { $gte: inicio } })
+        precioDeSemana(usuarioId, semana, anio, inicio, fin)
       ]);
 
       const ingresosTotal = ingresos[0]?.total || 0;
@@ -124,7 +126,8 @@ router.get('/ganancias', async (req, res) => {
       const ganancia = parseFloat((ingresosTotal - costoLeche).toFixed(2));
 
       return {
-        rango: { inicio, fin },
+        semana, anio,
+        rango: { inicio, fin, texto: textoRango(inicio, fin) },
         ingresos: ingresosTotal,
         litrosComprados,
         costoLitro,
@@ -134,8 +137,8 @@ router.get('/ganancias', async (req, res) => {
       };
     }
 
-    const semanaActual = await calcularSemana(lunesActual, domingoActual);
-    const semanaAnterior = await calcularSemana(lunesAnterior, domingoAnterior);
+    const semanaActual = await calcularSemana(actual);
+    const semanaAnterior = await calcularSemana(anterior);
 
     const variacion = semanaActual.ganancia - semanaAnterior.ganancia;
     const porcentaje = semanaAnterior.ganancia > 0
@@ -151,18 +154,18 @@ router.get('/ganancias', async (req, res) => {
   }
 });
 
-// GET /api/resumen/semanas?n=8 — serie de las últimas n semanas ISO (para los gráficos de Reportes)
+// GET /api/resumen/semanas?n=8 — serie de las últimas n semanas viernes–jueves (gráficos de Reportes)
 router.get('/semanas', async (req, res) => {
   try {
     const usuarioId = req.usuarioId;
     const ObjectId = require('mongoose').Types.ObjectId;
     const n = Math.min(Math.max(Number(req.query.n) || 8, 1), 26);
     const actual = semanaDeFecha(req.query.fecha ? new Date(req.query.fecha) : new Date());
-    const lunesActual = rangoSemana(actual.semana, actual.anio).inicio;
+    const inicioActual = rangoSemana(actual.semana, actual.anio).inicio;
 
     const semanas = [];
     for (let i = n - 1; i >= 0; i--) {
-      const inicio = new Date(lunesActual.getTime() - i * 7 * 24 * 60 * 60 * 1000);
+      const inicio = new Date(inicioActual.getTime() - i * 7 * 24 * 60 * 60 * 1000);
       const fin = new Date(inicio.getTime() + 7 * 24 * 60 * 60 * 1000 - 1);
       const { semana, anio } = semanaDeFecha(inicio);
       const match = { usuarioId: new ObjectId(usuarioId), fecha: { $gte: inicio, $lte: fin } };
@@ -171,7 +174,7 @@ router.get('/semanas', async (req, res) => {
         Venta.aggregate([{ $match: match }, { $group: { _id: null, total: { $sum: '$totalVenta' } } }]),
         Leche.aggregate([{ $match: match }, { $group: { _id: null, litros: { $sum: '$litros' } } }]),
         Produccion.aggregate([{ $match: match }, { $group: { _id: null, kg: { $sum: '$kgProducidos' }, litros: { $sum: '$litrosUsados' } } }]),
-        Precio.findOne({ usuarioId, fechaInicio: { $lte: fin }, fechaFin: { $gte: inicio } })
+        precioDeSemana(usuarioId, semana, anio, inicio, fin)
       ]);
       const ingresos = ventas[0]?.total || 0;
       const litros = leche[0]?.litros || 0;

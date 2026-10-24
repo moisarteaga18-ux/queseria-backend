@@ -1,5 +1,5 @@
 const router = require('express').Router();
-const { Ganadero, Leche, Pago } = require('../models');
+const { Ganadero, Leche, Liquidacion, Descuento } = require('../models');
 const { errorHttp, responderError } = require('../utils/inventario');
 const { nombreIgual, textoOpcional } = require('../utils/texto');
 
@@ -56,11 +56,11 @@ router.put('/:id', async (req, res) => {
 });
 
 // DELETE /api/ganaderos/:id
-// Si ya tiene leche o pagos registrados, solo se archiva (para no perder el historial).
+// Si ya tiene leche, liquidaciones o descuentos, solo se archiva (para no perder el historial).
 router.delete('/:id', async (req, res) => {
   try {
     const filtro = { usuarioId: req.usuarioId, ganaderoId: req.params.id };
-    const tieneHistorial = (await Leche.exists(filtro)) || (await Pago.exists(filtro));
+    const tieneHistorial = (await Leche.exists(filtro)) || (await Liquidacion.exists(filtro)) || (await Descuento.exists(filtro));
     if (tieneHistorial) {
       await Ganadero.updateOne({ _id: req.params.id, usuarioId: req.usuarioId }, { activo: false });
       return res.json({ ok: true, data: { archivado: true } });
