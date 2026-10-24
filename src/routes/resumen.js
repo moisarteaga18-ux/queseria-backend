@@ -1,6 +1,20 @@
 const router = require('express').Router();
 const { Leche, Produccion, Venta, Precio, PrecioLeche } = require('../models');
 const { semanaDeFecha, semanaDeQuery, semanaAnterior: semanaPrevia, rangoSemana, textoRango } = require('../utils/semana');
+const { calcularMerma } = require('../utils/merma');
+
+/**
+ * Merma (kg) de una semana: la calculada al cierre o, para la semana en curso, la estimada
+ * con el % promedio histórico.
+ */
+function mermaDeSemana(merma, semana, anio) {
+  const cierre = merma.semanas.find(c => c.semana === semana && c.anio === anio);
+  if (cierre) return { kg: cierre.mermaKg, pct: cierre.mermaPct, estimada: false };
+  if (merma.actual.semana === semana && merma.actual.anio === anio) {
+    return { kg: merma.actual.mermaEstimadaKg, pct: merma.promedioPct, estimada: true };
+  }
+  return { kg: 0, pct: 0, estimada: false };
+}
 
 /**
  * Precio semanal (queso) de una semana: el registrado con ese número de semana o,
@@ -104,6 +118,7 @@ router.get('/ganancias', async (req, res) => {
     // Semana actual (viernes a jueves; ?fecha= es el día local del teléfono) y la anterior
     const actual = semanaDeQuery(req.query);
     const anterior = semanaPrevia(actual.semana, actual.anio);
+    const merma = await calcularMerma(usuarioId, req.query.fecha ? new Date(req.query.fecha) : new Date());
 
     async function calcularSemana({ semana, anio }) {
       const { inicio, fin } = rangoSemana(semana, anio);
@@ -124,6 +139,9 @@ router.get('/ganancias', async (req, res) => {
       const costoLitro = await costoLitroDeSemana(usuarioId, inicio, precio);
       const costoLeche = parseFloat((litrosComprados * costoLitro).toFixed(2));
       const ganancia = parseFloat((ingresosTotal - costoLeche).toFixed(2));
+      // La merma es queso que se dejó de vender: se muestra como pérdida valorada al precio por kg
+      const m = mermaDeSemana(merma, semana, anio);
+      const precioKg = precio?.precioPorKg || 0;
 
       return {
         semana, anio,
@@ -133,7 +151,11 @@ router.get('/ganancias', async (req, res) => {
         costoLitro,
         costoLeche,
         ganancia,
-        precioVentaKg: precio?.precioPorKg || 0
+        precioVentaKg: precioKg,
+        mermaKg: m.kg,
+        mermaPct: m.pct,
+        mermaEstimada: m.estimada,
+        valorMerma: m.kg > 0 ? Math.round(m.kg * precioKg) : 0
       };
     }
 
@@ -162,6 +184,7 @@ router.get('/semanas', async (req, res) => {
     const n = Math.min(Math.max(Number(req.query.n) || 8, 1), 26);
     const actual = semanaDeFecha(req.query.fecha ? new Date(req.query.fecha) : new Date());
     const inicioActual = rangoSemana(actual.semana, actual.anio).inicio;
+    const merma = await calcularMerma(usuarioId, req.query.fecha ? new Date(req.query.fecha) : new Date());
 
     const semanas = [];
     for (let i = n - 1; i >= 0; i--) {
@@ -191,7 +214,8 @@ router.get('/semanas', async (req, res) => {
         ganancia: parseFloat((ingresos - costoLeche).toFixed(2)),
         kgProducidos: kg,
         // Libras de queso por lata (20 L) de leche usada
-        librasPorLata: litrosUsados > 0 ? parseFloat((kg * 2.2046 / (litrosUsados / 20)).toFixed(2)) : 0
+        librasPorLata: litrosUsados > 0 ? parseFloat((kg * 2.2046 / (litrosUsados / 20)).toFixed(2)) : 0,
+        ...(() => { const m = mermaDeSemana(merma, semana, anio); return { mermaKg: m.kg, mermaPct: m.pct, mermaEstimada: m.estimada }; })()
       });
     }
     res.json({ ok: true, data: semanas });

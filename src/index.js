@@ -29,6 +29,7 @@ app.use('/api/clientes', verificarToken, require('./routes/clientes'));
 app.use('/api/ganaderos', verificarToken, require('./routes/ganaderos'));
 app.use('/api/liquidaciones', verificarToken, require('./routes/liquidaciones'));
 app.use('/api/descuentos', verificarToken, require('./routes/descuentos'));
+app.use('/api/merma', verificarToken, require('./routes/merma'));
 
 // Conexión MongoDB Atlas
 mongoose.connect(process.env.MONGODB_URI)

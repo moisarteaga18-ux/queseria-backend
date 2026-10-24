@@ -169,6 +169,28 @@ const contadorSchema = new mongoose.Schema({
 });
 contadorSchema.index({ usuarioId: 1, nombre: 1 }, { unique: true });
 
+// ── Cierre semanal del queso (viernes a jueves) con la merma calculada ──────────
+// merma = stock inicial + producido − vendido − lo que pasa a la semana siguiente.
+// El único dato que pone el usuario es kgFinal (por defecto 0); el resto se calcula.
+const cierreSemanaSchema = new mongoose.Schema({
+  usuarioId: { type: mongoose.Schema.Types.ObjectId, ref: 'Usuario', required: true, index: true },
+  semana: { type: Number, required: true },
+  anio: { type: Number, required: true },
+  fechaInicio: { type: Date, required: true },
+  fechaFin: { type: Date, required: true },
+  stockInicialKg: { type: Number, default: 0 },
+  kgProducidos: { type: Number, default: 0 },
+  kgVendidos: { type: Number, default: 0 },
+  kgFinal: { type: Number, default: 0, min: 0 },
+  // true cuando el usuario confirmó cuánto queso pasó a la semana siguiente
+  confirmado: { type: Boolean, default: false },
+  mermaKg: { type: Number, default: 0 },
+  mermaPct: { type: Number, default: 0 },
+  precioPorKg: { type: Number, default: 0 },
+  valorMerma: { type: Number, default: 0 }
+}, { timestamps: true });
+cierreSemanaSchema.index({ usuarioId: 1, anio: 1, semana: 1 }, { unique: true });
+
 module.exports = {
   Leche: mongoose.model('Leche', lecheSchema),
   Produccion: mongoose.model('Produccion', produccionSchema),
@@ -181,5 +203,6 @@ module.exports = {
   PrecioLeche: mongoose.model('PrecioLeche', precioLecheSchema),
   Descuento: mongoose.model('Descuento', descuentoSchema),
   Liquidacion: mongoose.model('Liquidacion', liquidacionSchema, 'liquidaciones'),
-  Contador: mongoose.model('Contador', contadorSchema)
+  Contador: mongoose.model('Contador', contadorSchema),
+  CierreSemana: mongoose.model('CierreSemana', cierreSemanaSchema, 'cierres_semana')
 };

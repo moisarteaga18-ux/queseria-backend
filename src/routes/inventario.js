@@ -1,5 +1,5 @@
 const router = require('express').Router();
-const { Producto, Movimiento } = require('../models');
+const { Movimiento } = require('../models');
 const { errorHttp, responderError, registrarMovimiento } = require('../utils/inventario');
 const { textoOpcional } = require('../utils/texto');
 
@@ -29,25 +29,18 @@ router.get('/movimientos', async (req, res) => {
 });
 
 // POST /api/inventario/movimientos
-// { productoId, tipo: ENTRADA|SALIDA|AJUSTE, cantidadKg, motivo }
-// En ENTRADA/SALIDA, cantidadKg es la cantidad (positiva). En AJUSTE es el stock real contado.
+// { productoId, tipo: ENTRADA|SALIDA, cantidadKg (positiva), motivo }
+// Ya no hay AJUSTE: la merma no se registra a mano, se calcula sola en el cierre semanal.
 router.post('/movimientos', async (req, res) => {
   try {
     const { productoId, tipo } = req.body;
     const cantidad = Number(req.body.cantidadKg);
-    if (!['ENTRADA', 'SALIDA', 'AJUSTE'].includes(tipo)) throw errorHttp(400, 'Tipo de movimiento inválido');
-    if (!(cantidad >= 0) || (cantidad === 0 && tipo !== 'AJUSTE')) throw errorHttp(400, 'Cantidad inválida');
-
-    let delta = tipo === 'SALIDA' ? -cantidad : cantidad;
-    if (tipo === 'AJUSTE') {
-      const producto = await Producto.findOne({ _id: productoId, usuarioId: req.usuarioId });
-      if (!producto) throw errorHttp(404, 'Producto no encontrado');
-      delta = parseFloat((cantidad - producto.stockKg).toFixed(4));
-      if (delta === 0) return res.json({ ok: true, data: producto });
-    }
+    if (tipo === 'AJUSTE') throw errorHttp(400, 'La merma ya no se registra a mano: se calcula sola al cierre de cada semana');
+    if (!['ENTRADA', 'SALIDA'].includes(tipo)) throw errorHttp(400, 'Tipo de movimiento inválido');
+    if (!(cantidad > 0)) throw errorHttp(400, 'Cantidad inválida');
 
     const producto = await registrarMovimiento(req.usuarioId, {
-      productoId, tipo, cantidadKg: delta, motivo: textoOpcional(req.body.motivo)
+      productoId, tipo, cantidadKg: tipo === 'SALIDA' ? -cantidad : cantidad, motivo: textoOpcional(req.body.motivo)
     });
     res.status(201).json({ ok: true, data: producto });
   } catch (e) {
