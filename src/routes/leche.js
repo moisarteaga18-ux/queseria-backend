@@ -50,6 +50,32 @@ router.post('/', async (req, res) => {
   }
 });
 
+// PUT /api/leche/:id  { fecha, litros, ganaderoId, observaciones } — corregir un registro
+// (por ejemplo, asignarle el ganadero a un registro antiguo que no lo tenía)
+router.put('/:id', async (req, res) => {
+  try {
+    const registro = await Leche.findOne({ _id: req.params.id, usuarioId: req.usuarioId });
+    if (!registro) throw errorHttp(404, 'Registro no encontrado');
+    const { fecha, litros, ganaderoId, observaciones } = req.body;
+    if (litros !== undefined) {
+      if (!(Number(litros) > 0)) throw errorHttp(400, 'Litros inválidos');
+      registro.litros = Number(litros);
+    }
+    if (fecha) registro.fecha = new Date(fecha);
+    if (ganaderoId) {
+      const ganadero = await Ganadero.findOne({ _id: ganaderoId, usuarioId: req.usuarioId });
+      if (!ganadero) throw errorHttp(404, 'Ganadero no encontrado');
+      registro.ganaderoId = ganadero._id;
+      registro.proveedor = ganadero.nombre;
+    }
+    if (observaciones !== undefined) registro.observaciones = textoOpcional(observaciones);
+    await registro.save();
+    res.json({ ok: true, data: registro });
+  } catch (e) {
+    responderError(res, e);
+  }
+});
+
 // DELETE /api/leche/:id
 router.delete('/:id', async (req, res) => {
   try {

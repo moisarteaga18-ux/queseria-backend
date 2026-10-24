@@ -2,7 +2,7 @@ const router = require('express').Router();
 const { Types } = require('mongoose');
 const { Ganadero, Leche, PrecioLeche, Descuento, Liquidacion, Contador } = require('../models');
 const { errorHttp, responderError } = require('../utils/inventario');
-const { DIA_MS, rangoSemana, semanaDeQuery, textoRango, iso } = require('../utils/semana');
+const { DIA_MS, rangoSemana, semanaDeFecha, semanaDeQuery, semanaAnterior, textoRango, iso } = require('../utils/semana');
 const { textoOpcional } = require('../utils/texto');
 
 const redondear = (n) => Math.round(n * 100) / 100;
@@ -99,6 +99,28 @@ async function generar(usuarioId, ganadero, semana, anio) {
   return Liquidacion.create({ ...datos, usuarioId, numero: await siguienteNumero(usuarioId), estado: 'pendiente' });
 }
 
+/** "José  Pérez " → "jose perez" (para comparar nombres escritos a mano). */
+const normalizar = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+
+/**
+ * Registros de leche antiguos (de antes de elegir ganadero) solo tienen el nombre en `proveedor`:
+ * si ese nombre coincide con un único ganadero, se le asigna para que entre en su liquidación.
+ */
+async function vincularLecheSinGanadero(usuarioId, inicio, fin) {
+  const sueltos = await Leche.find({ usuarioId, fecha: { $gte: inicio, $lte: fin }, ganaderoId: null })
+    .select('proveedor').lean();
+  if (!sueltos.length) return;
+  const porNombre = new Map();
+  for (const g of await Ganadero.find({ usuarioId }).select('nombre').lean()) {
+    const n = normalizar(g.nombre);
+    porNombre.set(n, porNombre.has(n) ? null : g._id); // null = nombre repetido: no se adivina
+  }
+  for (const r of sueltos) {
+    const id = porNombre.get(normalizar(r.proveedor));
+    if (id) await Leche.updateOne({ _id: r._id }, { ganaderoId: id });
+  }
+}
+
 function resumenLiquidacion(l) {
   return l && { _id: l._id, numero: l.numero, estado: l.estado, total: l.total, fechaPago: l.fechaPago, formaPago: l.formaPago };
 }
@@ -113,6 +135,7 @@ router.get('/semana', async (req, res) => {
     const { inicio, fin } = rangoSemana(semana, anio);
     const hoy = req.query.fecha ? new Date(req.query.fecha) : new Date();
     const cerrada = hoy > fin;
+    await vincularLecheSinGanadero(usuarioId, inicio, fin);
 
     const [precio, ganaderos, lecheAgrupada, conDescuentos] = await Promise.all([
       precioDe(usuarioId, semana, anio),
@@ -173,6 +196,88 @@ router.get('/semana', async (req, res) => {
         ganaderos: filas
       }
     });
+  } catch (e) {
+    responderError(res, e);
+  }
+});
+
+// GET /api/liquidaciones/semanas?fecha=&n=8 — resumen de las últimas n semanas (la de [fecha] primero):
+// litros, ganaderos, total a pagar, pagado y pendiente. No genera liquidaciones (eso lo hace /semana).
+router.get('/semanas', async (req, res) => {
+  try {
+    const usuarioId = req.usuarioId;
+    const hoy = req.query.fecha ? new Date(req.query.fecha) : new Date();
+    const n = Math.min(Math.max(Number(req.query.n) || 8, 1), 26);
+
+    const semanas = [];
+    let s = semanaDeFecha(hoy);
+    for (let i = 0; i < n; i++) {
+      semanas.push({ ...s, ...rangoSemana(s.semana, s.anio) });
+      s = semanaAnterior(s.semana, s.anio);
+    }
+    const desde = semanas[n - 1].inicio;
+    const hasta = semanas[0].fin;
+    await vincularLecheSinGanadero(usuarioId, desde, hasta);
+
+    const claves = semanas.map(w => ({ semana: w.semana, anio: w.anio }));
+    const [leche, descuentos, liquidaciones, precios] = await Promise.all([
+      Leche.find({ usuarioId, fecha: { $gte: desde, $lte: hasta } }).select('fecha litros ganaderoId').lean(),
+      Descuento.find({ usuarioId, fecha: { $gte: desde, $lte: hasta } }).lean(),
+      Liquidacion.find({ usuarioId, $or: claves }).lean(),
+      PrecioLeche.find({ usuarioId, $or: claves }).lean()
+    ]);
+    const indice = (fecha) => semanas.findIndex(w => fecha >= w.inicio && fecha <= w.fin);
+
+    const datos = semanas.map(w => ({
+      precio: precios.find(p => p.semana === w.semana && p.anio === w.anio)?.precioLitro ?? null,
+      litrosDe: {}, descuentosDe: {}, litrosSinGanadero: 0
+    }));
+    for (const r of leche) {
+      const d = datos[indice(new Date(r.fecha))];
+      if (!d) continue;
+      if (!r.ganaderoId) { d.litrosSinGanadero += r.litros; continue; }
+      d.litrosDe[r.ganaderoId] = (d.litrosDe[r.ganaderoId] || 0) + r.litros;
+    }
+    for (const x of descuentos) {
+      const d = datos[indice(new Date(x.fecha))];
+      if (d) (d.descuentosDe[x.ganaderoId] ||= []).push(x);
+    }
+
+    const resultado = semanas.map((w, i) => {
+      const d = datos[i];
+      const liqs = liquidaciones.filter(l => l.semana === w.semana && l.anio === w.anio);
+      const ids = new Set([...Object.keys(d.litrosDe), ...liqs.map(l => String(l.ganaderoId))]);
+      let totalAPagar = 0, totalPagado = 0, sinPrecio = 0, pagadas = 0, sinLiquidar = 0;
+      for (const id of ids) {
+        const liq = liqs.find(l => String(l.ganaderoId) === id);
+        if (liq?.estado === 'pagado') { totalAPagar += liq.total; totalPagado += liq.total; pagadas++; continue; }
+        if (!liq) sinLiquidar++;
+        // Igual que una liquidación pendiente: litros × precio − descuentos de la semana
+        const precio = d.precio ?? liq?.precioLitro;
+        if (precio == null) { sinPrecio++; continue; }
+        const descuento = (d.descuentosDe[id] || []).reduce((suma, x) =>
+          suma + (x.tipo === 'leche_rechazada' && x.litros ? x.litros * precio : (x.valor || 0)), 0);
+        totalAPagar += (d.litrosDe[id] || 0) * precio - descuento;
+      }
+      return {
+        semana: w.semana, anio: w.anio,
+        fechaInicio: w.inicio, fechaFin: w.fin,
+        texto: textoRango(w.inicio, w.fin),
+        cerrada: hoy > w.fin,
+        precioLitro: d.precio,
+        totalLitros: redondear(Object.values(d.litrosDe).reduce((a, b) => a + b, 0)),
+        ganaderos: ids.size,
+        liquidaciones: liqs.length,
+        pagadas,
+        sinLiquidar,
+        sinPrecio,
+        totalAPagar: redondear(totalAPagar),
+        totalPagado: redondear(totalPagado),
+        totalPendiente: redondear(totalAPagar - totalPagado),
+        litrosSinGanadero: redondear(d.litrosSinGanadero)
+      };
+    });
+    res.json({ ok: true, data: resultado });
   } catch (e) {
     responderError(res, e);
   }
