@@ -1,0 +1,7 @@
+# Variables con secretos: nunca se suben al repositorio
+.env
+.env.*
+!.env.example
+
+# Dependencias (se instalan con npm install)
+node_modules/

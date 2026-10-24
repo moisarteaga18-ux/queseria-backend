@@ -1,12 +1,16 @@
 require('dotenv').config();
+require('./config'); // Sale con error si falta JWT_SECRET (antes de aceptar peticiones)
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const { verificarToken } = require('./middleware/auth');
 
 const app = express();
+app.disable('x-powered-by');
+// Render pone un proxy delante: así req.ip es la IP real (para el límite de intentos de login)
+app.set('trust proxy', 1);
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '100kb' }));
 
 // Ruta pública de bienvenida
 app.get('/', (req, res) => {
