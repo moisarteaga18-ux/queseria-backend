@@ -7,7 +7,7 @@ const { verificarToken } = require('./middleware/auth');
 
 const app = express();
 app.disable('x-powered-by');
-// Render pone un proxy delante: así req.ip es la IP real (para el límite de intentos de login)
+// Render pone proxies delante: req.ip toma la IP del último (el límite de login usa además la cabecera del proxy de borde)
 app.set('trust proxy', 1);
 app.use(cors());
 app.use(express.json({ limit: '100kb' }));

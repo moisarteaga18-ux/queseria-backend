@@ -5,8 +5,15 @@ const { JWT_SECRET, JWT_ALGORITMO, JWT_DURACION } = require('../config');
 const { leerToken } = require('../middleware/auth');
 const limite = require('../utils/limite');
 
-const MAX_FALLOS_USUARIO = 10; // por usuario e IP, cada 15 minutos
+const MAX_FALLOS_USUARIO = 10; // por usuario (desde cualquier IP), cada 15 minutos
 const MAX_FALLOS_IP = 30;      // por IP, cada 15 minutos
+
+/**
+ * IP real del cliente. Render tiene más de un proxy delante y req.ip puede variar entre
+ * peticiones; la cabecera del proxy de borde (Cloudflare) trae la IP del cliente.
+ * Aunque alguien la falsifique, el límite por usuario no depende de la IP.
+ */
+const ipDe = (req) => req.headers['cf-connecting-ip'] || req.headers['true-client-ip'] || req.ip;
 
 function crearToken(usuario) {
   return jwt.sign(
@@ -67,8 +74,8 @@ router.post('/login', async (req, res) => {
     }
 
     const nombre = username.toLowerCase().trim();
-    const claveUsuario = `u:${req.ip}:${nombre}`;
-    const claveIp = `ip:${req.ip}`;
+    const claveUsuario = `u:${nombre}`;
+    const claveIp = `ip:${ipDe(req)}`;
     if (limite.bloqueado(claveUsuario, MAX_FALLOS_USUARIO) || limite.bloqueado(claveIp, MAX_FALLOS_IP)) {
       return res.status(429).json({ ok: false, error: 'Demasiados intentos fallidos. Espera 15 minutos e intenta de nuevo.' });
     }
