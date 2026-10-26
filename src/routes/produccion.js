@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const { Produccion } = require('../models');
-const { responderError, registrarMovimiento, revertirReferencia } = require('../utils/inventario');
+const { errorHttp, responderError, registrarMovimiento, revertirReferencia, reemplazarMovimiento } = require('../utils/inventario');
+const { textoOpcional } = require('../utils/texto');
 
 router.get('/', async (req, res) => {
   try {
@@ -37,6 +38,34 @@ router.post('/', async (req, res) => {
       }
     }
     res.status(201).json({ ok: true, data: registro });
+  } catch (e) {
+    responderError(res, e);
+  }
+});
+
+// PUT /api/produccion/:id  { fecha, litrosUsados, kgProducidos, observaciones, productoId }
+// Corrige una producción: el inventario se ajusta (sale lo anterior y entra lo nuevo) y el
+// rendimiento se recalcula. Merma, Reportes y Ganancias se calculan al consultarlos.
+router.put('/:id', async (req, res) => {
+  try {
+    const registro = await Produccion.findOne({ _id: req.params.id, usuarioId: req.usuarioId });
+    if (!registro) throw errorHttp(404, 'Producción no encontrada');
+    const { fecha, litrosUsados, kgProducidos, observaciones } = req.body;
+    if (litrosUsados !== undefined && !(Number(litrosUsados) > 0)) throw errorHttp(400, 'Litros inválidos');
+    if (kgProducidos !== undefined && !(Number(kgProducidos) > 0)) throw errorHttp(400, 'Kilos inválidos');
+    if (litrosUsados !== undefined) registro.litrosUsados = Number(litrosUsados);
+    if (kgProducidos !== undefined) registro.kgProducidos = Number(kgProducidos);
+    if (fecha) registro.fecha = new Date(fecha);
+    if (observaciones !== undefined) registro.observaciones = textoOpcional(observaciones);
+    // productoId: null o "" = ya no se suma al inventario
+    if (req.body.productoId !== undefined) registro.productoId = req.body.productoId || undefined;
+
+    await reemplazarMovimiento(req.usuarioId, registro._id, registro.productoId && {
+      productoId: registro.productoId, tipo: 'ENTRADA', cantidadKg: registro.kgProducidos,
+      motivo: 'Producción', fecha: registro.fecha
+    });
+    await registro.save(); // recalcula el rendimiento
+    res.json({ ok: true, data: registro });
   } catch (e) {
     responderError(res, e);
   }

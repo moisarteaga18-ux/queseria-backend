@@ -25,14 +25,10 @@ async function precioDeSemana(usuarioId, semana, anio, inicio, fin) {
     || Precio.findOne({ usuarioId, fechaInicio: { $lte: fin }, fechaFin: { $gte: inicio } }).sort({ createdAt: -1 });
 }
 
-/**
- * Costo del litro de leche para la semana de [fecha]: el precio que se paga a los ganaderos
- * (Pagos) y, si no se definió, el costoLitroLeche del precio semanal.
- */
-async function costoLitroDeSemana(usuarioId, fecha, precio) {
+/** Costo del litro de leche de la semana de [fecha]: el precio del litro (Precios / liquidaciones), 0 si no hay. */
+async function costoLitroDeSemana(usuarioId, fecha) {
   const { semana, anio } = semanaDeFecha(fecha);
-  const precioLeche = await PrecioLeche.findOne({ usuarioId, semana, anio });
-  return precioLeche?.precioLitro ?? precio?.costoLitroLeche ?? 0;
+  return (await PrecioLeche.findOne({ usuarioId, semana, anio }))?.precioLitro ?? 0;
 }
 
 // GET /api/resumen/hoy?fecha=yyyy-MM-dd  (la app manda su fecha local; sin ella se usa la del servidor)
@@ -88,7 +84,7 @@ router.get('/hoy', async (req, res) => {
 
     const litrosHoy = leche[0]?.totalLitros || 0;
     const totalVentasHoy = ventas.reduce((sum, v) => sum + v.totalVenta, 0);
-    const costoLecheHoy = parseFloat((litrosHoy * await costoLitroDeSemana(usuarioId, inicio, precioActivo)).toFixed(2));
+    const costoLecheHoy = parseFloat((litrosHoy * await costoLitroDeSemana(usuarioId, inicio)).toFixed(2));
 
     res.json({
       ok: true,
@@ -136,7 +132,7 @@ router.get('/ganancias', async (req, res) => {
 
       const ingresosTotal = ingresos[0]?.total || 0;
       const litrosComprados = leche[0]?.totalLitros || 0;
-      const costoLitro = await costoLitroDeSemana(usuarioId, inicio, precio);
+      const costoLitro = await costoLitroDeSemana(usuarioId, inicio);
       const costoLeche = parseFloat((litrosComprados * costoLitro).toFixed(2));
       const ganancia = parseFloat((ingresosTotal - costoLeche).toFixed(2));
       // La merma es queso que se dejó de vender: se muestra como pérdida valorada al precio por kg
@@ -201,7 +197,7 @@ router.get('/semanas', async (req, res) => {
       ]);
       const ingresos = ventas[0]?.total || 0;
       const litros = leche[0]?.litros || 0;
-      const costoLeche = parseFloat((litros * await costoLitroDeSemana(usuarioId, inicio, precio)).toFixed(2));
+      const costoLeche = parseFloat((litros * await costoLitroDeSemana(usuarioId, inicio)).toFixed(2));
       const kg = produccion[0]?.kg || 0;
       const litrosUsados = produccion[0]?.litros || 0;
       semanas.push({

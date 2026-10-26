@@ -2,10 +2,11 @@ const router = require('express').Router();
 const { Types } = require('mongoose');
 const { Ganadero, Leche, PrecioLeche, Descuento, Liquidacion, Contador } = require('../models');
 const { errorHttp, responderError } = require('../utils/inventario');
-const { DIA_MS, rangoSemana, semanaDeFecha, semanaDeQuery, semanaAnterior, textoRango, iso } = require('../utils/semana');
+const { rangoSemana, semanaDeFecha, semanaDeQuery, semanaAnterior, textoRango } = require('../utils/semana');
 const { textoOpcional } = require('../utils/texto');
+const { redondear, precioDe, calcular, refrescar } = require('../utils/liquidacion');
+const { fijarPrecioLitro } = require('../utils/precios');
 
-const redondear = (n) => Math.round(n * 100) / 100;
 const FORMAS_PAGO = ['efectivo', 'nequi', 'transferencia'];
 
 function leerSemana(fuente) {
@@ -13,71 +14,6 @@ function leerSemana(fuente) {
   const anio = Number(fuente.anio);
   if (!(semana >= 1 && semana <= 53) || !(anio > 2000)) throw errorHttp(400, 'Semana inválida');
   return { semana, anio };
-}
-
-async function precioDe(usuarioId, semana, anio) {
-  return (await PrecioLeche.findOne({ usuarioId, semana, anio }))?.precioLitro ?? null;
-}
-
-/**
- * Calcula (sin guardar) la liquidación de un ganadero en una semana viernes–jueves:
- * litros por día, subtotal, descuentos registrados en la semana y total a pagar.
- */
-async function calcular(usuarioId, ganadero, semana, anio, precioLitro) {
-  const { inicio, fin } = rangoSemana(semana, anio);
-  const [registros, descuentos] = await Promise.all([
-    Leche.find({ usuarioId, ganaderoId: ganadero._id, fecha: { $gte: inicio, $lte: fin } }).lean(),
-    Descuento.find({ usuarioId, ganaderoId: ganadero._id, fecha: { $gte: inicio, $lte: fin } }).sort({ fecha: 1 }).lean()
-  ]);
-
-  const dias = Array.from({ length: 7 }, (_, i) => ({
-    fecha: iso(new Date(inicio.getTime() + i * DIA_MS)), litros: 0, entregas: 0
-  }));
-  for (const r of registros) {
-    const dia = dias[Math.floor((new Date(r.fecha) - inicio) / DIA_MS)];
-    if (dia) { dia.litros += r.litros; dia.entregas += 1; }
-  }
-  dias.forEach(d => { d.litros = redondear(d.litros); });
-
-  const precio = precioLitro ?? 0;
-  const litros = redondear(registros.reduce((s, r) => s + r.litros, 0));
-  const subtotal = redondear(litros * precio);
-  const lineas = descuentos.map(d => ({
-    descuentoId: d._id,
-    tipo: d.tipo,
-    fecha: d.fecha,
-    descripcion: d.descripcion,
-    litros: d.litros,
-    // La leche rechazada se descuenta al precio del litro de la semana
-    valor: redondear(d.tipo === 'leche_rechazada' && d.litros ? d.litros * precio : (d.valor || 0))
-  }));
-  const totalDescuentos = redondear(lineas.reduce((s, l) => s + l.valor, 0));
-
-  return {
-    ganaderoId: ganadero._id,
-    nombreGanadero: ganadero.nombre,
-    telefonoGanadero: ganadero.telefono,
-    semana, anio,
-    fechaInicio: inicio,
-    fechaFin: fin,
-    dias, litros,
-    precioLitro: precio,
-    subtotal,
-    descuentos: lineas,
-    totalDescuentos,
-    total: redondear(subtotal - totalDescuentos)
-  };
-}
-
-/** Recalcula una liquidación pendiente con los datos actuales (las pagadas no se tocan). */
-async function refrescar(liq) {
-  if (liq.estado !== 'pendiente') return liq;
-  const ganadero = await Ganadero.findById(liq.ganaderoId);
-  if (!ganadero) return liq;
-  const precio = (await precioDe(liq.usuarioId, liq.semana, liq.anio)) ?? liq.precioLitro;
-  liq.set(await calcular(liq.usuarioId, ganadero, liq.semana, liq.anio, precio));
-  if (liq.isModified()) await liq.save();
-  return liq;
 }
 
 async function siguienteNumero(usuarioId) {
@@ -99,30 +35,8 @@ async function generar(usuarioId, ganadero, semana, anio) {
   return Liquidacion.create({ ...datos, usuarioId, numero: await siguienteNumero(usuarioId), estado: 'pendiente' });
 }
 
-/** "José  Pérez " → "jose perez" (para comparar nombres escritos a mano). */
-const normalizar = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
-
-/**
- * Registros de leche antiguos (de antes de elegir ganadero) solo tienen el nombre en `proveedor`:
- * si ese nombre coincide con un único ganadero, se le asigna para que entre en su liquidación.
- */
-async function vincularLecheSinGanadero(usuarioId, inicio, fin) {
-  const sueltos = await Leche.find({ usuarioId, fecha: { $gte: inicio, $lte: fin }, ganaderoId: null })
-    .select('proveedor').lean();
-  if (!sueltos.length) return;
-  const porNombre = new Map();
-  for (const g of await Ganadero.find({ usuarioId }).select('nombre').lean()) {
-    const n = normalizar(g.nombre);
-    porNombre.set(n, porNombre.has(n) ? null : g._id); // null = nombre repetido: no se adivina
-  }
-  for (const r of sueltos) {
-    const id = porNombre.get(normalizar(r.proveedor));
-    if (id) await Leche.updateOne({ _id: r._id }, { ganaderoId: id });
-  }
-}
-
 function resumenLiquidacion(l) {
-  return l && { _id: l._id, numero: l.numero, estado: l.estado, total: l.total, fechaPago: l.fechaPago, formaPago: l.formaPago };
+  return l && { _id: l._id, numero: l.numero, estado: l.estado, total: l.total, totalPagado: l.totalPagado, fechaPago: l.fechaPago, formaPago: l.formaPago };
 }
 
 // GET /api/liquidaciones/semana?semana=&anio=&fecha=  (fecha = día local del teléfono)
@@ -135,7 +49,6 @@ router.get('/semana', async (req, res) => {
     const { inicio, fin } = rangoSemana(semana, anio);
     const hoy = req.query.fecha ? new Date(req.query.fecha) : new Date();
     const cerrada = hoy > fin;
-    await vincularLecheSinGanadero(usuarioId, inicio, fin);
 
     const [precio, ganaderos, lecheAgrupada, conDescuentos] = await Promise.all([
       precioDe(usuarioId, semana, anio),
@@ -178,6 +91,7 @@ router.get('/semana', async (req, res) => {
     }
 
     const suma = (f) => redondear(filas.reduce((s, x) => s + (f(x) || 0), 0));
+    const pagadoDe = (f) => f.liquidacion?.estado === 'pagado' ? (f.liquidacion.totalPagado ?? f.total) : 0;
     res.json({
       ok: true,
       data: {
@@ -189,8 +103,9 @@ router.get('/semana', async (req, res) => {
         precioLitro: precio,
         totalLitros: suma(f => f.litros),
         totalAPagar: suma(f => f.total),
-        totalPagado: suma(f => f.liquidacion?.estado === 'pagado' ? f.total : 0),
-        totalPendiente: suma(f => f.liquidacion?.estado === 'pagado' ? 0 : f.total),
+        totalPagado: suma(pagadoDe),
+        // Incluye la diferencia de una liquidación pagada que se corrigió después
+        totalPendiente: suma(f => (f.total || 0) - pagadoDe(f)),
         sinLiquidar: filas.filter(f => !f.liquidacion && f.litros > 0).length,
         litrosSinGanadero: litrosDe['null'] || 0,
         ganaderos: filas
@@ -217,7 +132,6 @@ router.get('/semanas', async (req, res) => {
     }
     const desde = semanas[n - 1].inicio;
     const hasta = semanas[0].fin;
-    await vincularLecheSinGanadero(usuarioId, desde, hasta);
 
     const claves = semanas.map(w => ({ semana: w.semana, anio: w.anio }));
     const [leche, descuentos, liquidaciones, precios] = await Promise.all([
@@ -250,7 +164,7 @@ router.get('/semanas', async (req, res) => {
       let totalAPagar = 0, totalPagado = 0, sinPrecio = 0, pagadas = 0, sinLiquidar = 0;
       for (const id of ids) {
         const liq = liqs.find(l => String(l.ganaderoId) === id);
-        if (liq?.estado === 'pagado') { totalAPagar += liq.total; totalPagado += liq.total; pagadas++; continue; }
+        if (liq?.estado === 'pagado') { totalAPagar += liq.total; totalPagado += liq.totalPagado ?? liq.total; pagadas++; continue; }
         if (!liq) sinLiquidar++;
         // Igual que una liquidación pendiente: litros × precio − descuentos de la semana
         const precio = d.precio ?? liq?.precioLitro;
@@ -317,17 +231,12 @@ router.get('/resumen', async (req, res) => {
   }
 });
 
-// PUT /api/liquidaciones/precio  { semana, anio, precioLitro } — precio del litro de esa semana
+// PUT /api/liquidaciones/precio  { semana, anio, precioLitro, confirmar } — precio del litro de esa semana
+// (el mismo que se edita en Precios). Si la semana tiene liquidaciones pagadas, pide confirmación (409).
 router.put('/precio', async (req, res) => {
   try {
     const { semana, anio } = leerSemana(req.body);
-    const precioLitro = Number(req.body.precioLitro);
-    if (!(precioLitro > 0)) throw errorHttp(400, 'Precio por litro inválido');
-    const precio = await PrecioLeche.findOneAndUpdate(
-      { usuarioId: req.usuarioId, semana, anio },
-      { precioLitro },
-      { new: true, upsert: true, setDefaultsOnInsert: true }
-    );
+    const precio = await fijarPrecioLitro(req, semana, anio, Number(req.body.precioLitro));
     res.json({ ok: true, data: precio });
   } catch (e) {
     responderError(res, e);
@@ -414,6 +323,7 @@ router.put('/:id/pagar', async (req, res) => {
     if (!FORMAS_PAGO.includes(req.body.formaPago)) throw errorHttp(400, 'Elige la forma de pago');
     await refrescar(liq); // se congela con los datos al momento del pago
     liq.estado = 'pagado';
+    liq.totalPagado = liq.total;
     liq.formaPago = req.body.formaPago;
     liq.fechaPago = req.body.fechaPago ? new Date(req.body.fechaPago) : new Date();
     liq.notas = textoOpcional(req.body.notas);
@@ -431,6 +341,7 @@ router.put('/:id/pendiente', async (req, res) => {
     liq.estado = 'pendiente';
     liq.fechaPago = undefined;
     liq.formaPago = undefined;
+    liq.totalPagado = undefined;
     await liq.save();
     res.json({ ok: true, data: await refrescar(liq) });
   } catch (e) {

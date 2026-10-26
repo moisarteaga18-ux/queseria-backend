@@ -5,3 +5,4 @@
 
 # Dependencias (se instalan con npm install)
 node_modules/
+scripts/respaldo-*.json

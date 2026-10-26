@@ -7,10 +7,13 @@ function errorHttp(status, mensaje) {
   return e;
 }
 
-/** Responde un error de ruta usando su código HTTP (500 si no tiene). */
+/**
+ * Responde un error de ruta usando su código HTTP (500 si no tiene).
+ * `requiereConfirmacion` (409) indica que la app debe preguntar y reenviar con `confirmar: true`.
+ */
 function responderError(res, e) {
   res.status(e.status || (e.name === 'CastError' || e.name === 'ValidationError' ? 400 : 500))
-    .json({ ok: false, error: e.message });
+    .json({ ok: false, error: e.message, ...(e.requiereConfirmacion ? { requiereConfirmacion: true } : {}) });
 }
 
 /**
@@ -46,4 +49,24 @@ async function revertirReferencia(usuarioId, referencia) {
   return movimientos.length > 0;
 }
 
-module.exports = { errorHttp, responderError, registrarMovimiento, revertirReferencia };
+/**
+ * Cambia el movimiento de una venta/producción corregida: deshace el anterior y aplica [nuevo]
+ * (o ninguno si es null). Si el nuevo no se puede aplicar (sin stock), deja el anterior como estaba.
+ */
+async function reemplazarMovimiento(usuarioId, referencia, nuevo) {
+  const anteriores = await Movimiento.find({ usuarioId, referencia: String(referencia) }).lean();
+  await revertirReferencia(usuarioId, referencia);
+  if (!nuevo) return;
+  try {
+    await registrarMovimiento(usuarioId, { ...nuevo, referencia });
+  } catch (e) {
+    for (const m of anteriores) {
+      await Producto.updateOne({ _id: m.productoId, usuarioId }, { $inc: { stockKg: m.cantidadKg } });
+      const { _id, __v, ...copia } = m;
+      await Movimiento.create(copia);
+    }
+    throw e;
+  }
+}
+
+module.exports = { errorHttp, responderError, registrarMovimiento, revertirReferencia, reemplazarMovimiento };

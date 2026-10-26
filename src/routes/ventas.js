@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { Venta, Precio, Cliente } = require('../models');
-const { errorHttp, responderError, registrarMovimiento, revertirReferencia } = require('../utils/inventario');
+const { errorHttp, responderError, registrarMovimiento, revertirReferencia, reemplazarMovimiento } = require('../utils/inventario');
 const { textoOpcional } = require('../utils/texto');
 
 const LIBRAS_POR_KG = 2.2046;
@@ -70,6 +70,51 @@ router.post('/', async (req, res) => {
       }
     }
     res.status(201).json({ ok: true, data: venta });
+  } catch (e) {
+    responderError(res, e);
+  }
+});
+
+// PUT /api/ventas/:id  (mismos datos que POST) — corrige una venta. El inventario se ajusta:
+// vuelve el queso de la venta anterior y sale el de la corregida (si no alcanza el stock, no cambia nada).
+router.put('/:id', async (req, res) => {
+  try {
+    const venta = await Venta.findOne({ _id: req.params.id, usuarioId: req.usuarioId });
+    if (!venta) throw errorHttp(404, 'Venta no encontrada');
+    const b = req.body;
+    if (b.tipoVenta !== undefined) venta.tipoVenta = b.tipoVenta;
+    if (b.unidad !== undefined) venta.unidad = b.unidad;
+    if (b.fecha) venta.fecha = new Date(b.fecha);
+    if (b.cantidad !== undefined) {
+      if (!(Number(b.cantidad) > 0)) throw errorHttp(400, 'Cantidad inválida');
+      venta.cantidad = Number(b.cantidad);
+    }
+    if (b.precioUnitario !== undefined) {
+      if (!(Number(b.precioUnitario) > 0)) throw errorHttp(400, 'Precio inválido');
+      venta.precioUnitario = Number(b.precioUnitario);
+    }
+    if (b.clienteId !== undefined || b.cliente !== undefined) {
+      let cliente = textoOpcional(b.cliente);
+      venta.clienteId = undefined;
+      if (b.clienteId) {
+        const c = await Cliente.findOne({ _id: b.clienteId, usuarioId: req.usuarioId });
+        if (!c) throw errorHttp(404, 'Cliente no encontrado');
+        cliente = c.nombre;
+        venta.clienteId = c._id;
+      }
+      venta.cliente = cliente;
+    }
+    if (b.productoId !== undefined) venta.productoId = b.productoId || undefined;
+    venta.totalVenta = parseFloat((venta.cantidad * venta.precioUnitario).toFixed(2));
+    await venta.validate();
+
+    await reemplazarMovimiento(req.usuarioId, venta._id, venta.productoId && {
+      productoId: venta.productoId, tipo: 'SALIDA',
+      cantidadKg: -(venta.unidad === 'libras' ? venta.cantidad / LIBRAS_POR_KG : venta.cantidad),
+      motivo: 'Venta' + (venta.cliente ? ` a ${venta.cliente}` : ''), fecha: venta.fecha
+    });
+    await venta.save();
+    res.json({ ok: true, data: venta });
   } catch (e) {
     responderError(res, e);
   }

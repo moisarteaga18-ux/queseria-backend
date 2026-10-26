@@ -5,9 +5,8 @@ const lecheSchema = new mongoose.Schema({
   usuarioId: { type: mongoose.Schema.Types.ObjectId, ref: 'Usuario', required: true, index: true },
   fecha: { type: Date, required: true, default: Date.now },
   litros: { type: Number, required: true, min: 0 },
-  ganaderoId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ganadero', index: true },
-  // Nombre del ganadero al momento del registro (o texto libre en registros antiguos)
-  proveedor: { type: String, default: 'Principal' },
+  // El nombre se toma siempre del ganadero (el campo viejo `proveedor` se migró y eliminó)
+  ganaderoId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ganadero', required: true, index: true },
   observaciones: { type: String }
 }, { timestamps: true });
 
@@ -30,7 +29,8 @@ produccionSchema.pre('save', function(next) {
   next();
 });
 
-// ── Precio semanal ───────────────────────────────────────────────────────────
+// ── Precio semanal del queso ─────────────────────────────────────────────────
+// El costo del litro de leche NO va aquí: está solo en PrecioLeche (lo que se paga a los ganaderos).
 const precioSchema = new mongoose.Schema({
   usuarioId: { type: mongoose.Schema.Types.ObjectId, ref: 'Usuario', required: true, index: true },
   semana: { type: Number, required: true },
@@ -38,7 +38,6 @@ const precioSchema = new mongoose.Schema({
   fechaInicio: { type: Date, required: true },
   fechaFin: { type: Date, required: true },
   precioPorKg: { type: Number, required: true, min: 0 },
-  costoLitroLeche: { type: Number, default: 0 },
   activo: { type: Boolean, default: true }
 }, { timestamps: true });
 
@@ -103,7 +102,8 @@ const ganaderoSchema = new mongoose.Schema({
   activo: { type: Boolean, default: true }
 }, { timestamps: true });
 
-// ── Precio del litro de leche que se paga a los ganaderos, por semana ISO ─────
+// ── Precio del litro de leche, por semana (viernes a jueves) ──────────────────
+// Único lugar del costo del litro: lo usan las liquidaciones, Ganancias, Reportes y Precios.
 const precioLecheSchema = new mongoose.Schema({
   usuarioId: { type: mongoose.Schema.Types.ObjectId, ref: 'Usuario', required: true, index: true },
   semana: { type: Number, required: true },
@@ -154,6 +154,9 @@ const liquidacionSchema = new mongoose.Schema({
   totalDescuentos: { type: Number, default: 0 },
   total: { type: Number, required: true },
   estado: { type: String, enum: ['pendiente', 'pagado'], default: 'pendiente' },
+  // Lo que se pagó. Si después se corrige la semana (con confirmación), `total` cambia y
+  // la diferencia con este valor es lo que queda por ajustar con el ganadero.
+  totalPagado: { type: Number },
   fechaPago: { type: Date },
   formaPago: { type: String, enum: ['efectivo', 'nequi', 'transferencia'] },
   notas: { type: String }

@@ -39,7 +39,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-// PUT /api/ganaderos/:id  (si cambia el nombre, se actualiza en sus registros de leche)
+// PUT /api/ganaderos/:id  (los registros de leche toman el nombre de aquí)
 router.put('/:id', async (req, res) => {
   try {
     const datos = leerDatos(req.body);
@@ -48,7 +48,6 @@ router.put('/:id', async (req, res) => {
       { _id: req.params.id, usuarioId: req.usuarioId }, datos, { new: true }
     );
     if (!ganadero) throw errorHttp(404, 'Ganadero no encontrado');
-    await Leche.updateMany({ usuarioId: req.usuarioId, ganaderoId: ganadero._id }, { proveedor: ganadero.nombre });
     res.json({ ok: true, data: ganadero });
   } catch (e) {
     responderError(res, e);
