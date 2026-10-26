@@ -9,14 +9,14 @@
 const { Types } = require('mongoose');
 const { Produccion, Venta, Precio, CierreSemana } = require('../models');
 const { DIA_MS, rangoSemana, semanaDeFecha, textoRango } = require('./semana');
+const { aKg } = require('./unidades');
 
-const LIBRAS_POR_KG = 2.2046;
 const MAX_SEMANAS = 52;
 const redondear = (n, d = 2) => { const f = 10 ** d; return Math.round(n * f) / f; };
 const clave = (s) => `${s.anio}-${s.semana}`;
 
 /** kg vendidos de una venta (las ventas por libras se pasan a kg). */
-const kgDeVenta = (v) => (v.unidad === 'libras' ? v.cantidad / LIBRAS_POR_KG : v.cantidad);
+const kgDeVenta = (v) => aKg(v.cantidad, v.unidad);
 
 /** Lista de semanas desde [desde] hasta [hasta] (inclusive), en orden. */
 function semanasEntre(desde, hasta) {

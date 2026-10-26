@@ -1,31 +1,50 @@
 const mongoose = require('mongoose');
+const { librasPorLata } = require('../utils/unidades');
+
+/**
+ * Número decimal: se guarda SIEMPRE como double en MongoDB (con Number, los valores sin decimales
+ * quedaban como int y Atlas mostraba el campo con tipo mixto) y en el código se lee como número.
+ * [min]: el tipo Double no aplica la regla min de Mongoose, por eso va como validador.
+ */
+function decimal({ min, ...resto } = {}) {
+  return {
+    type: mongoose.Schema.Types.Double,
+    get: (v) => (v == null ? v : Number(v)),
+    ...(min !== undefined && {
+      validate: { validator: (v) => v == null || Number(v) >= min, message: '{PATH} no puede ser menor que ' + min }
+    }),
+    ...resto
+  };
+}
+// Los getters convierten el double a número también en las respuestas JSON
+const opciones = { timestamps: true, toJSON: { getters: true }, toObject: { getters: true }, id: false };
 
 // ── Entrada de leche diaria ──────────────────────────────────────────────────
 const lecheSchema = new mongoose.Schema({
   usuarioId: { type: mongoose.Schema.Types.ObjectId, ref: 'Usuario', required: true, index: true },
   fecha: { type: Date, required: true, default: Date.now },
-  litros: { type: Number, required: true, min: 0 },
+  litros: decimal({ required: true, min: 0 }),
   // El nombre se toma siempre del ganadero (el campo viejo `proveedor` se migró y eliminó)
   ganaderoId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ganadero', required: true, index: true },
   observaciones: { type: String }
-}, { timestamps: true });
+}, opciones);
 
 // ── Producción de queso ──────────────────────────────────────────────────────
 const produccionSchema = new mongoose.Schema({
   usuarioId: { type: mongoose.Schema.Types.ObjectId, ref: 'Usuario', required: true, index: true },
   fecha: { type: Date, required: true, default: Date.now },
-  litrosUsados: { type: Number, required: true },
-  kgProducidos: { type: Number, required: true },
-  rendimiento: { type: Number },
+  litrosUsados: decimal({ required: true }),
+  kgProducidos: decimal({ required: true }),
+  // Libras de queso por lata (ver pre('save'))
+  rendimiento: decimal(),
   // Producto al que se sumó el queso en el inventario (opcional)
   productoId: { type: mongoose.Schema.Types.ObjectId, ref: 'Producto' },
   observaciones: { type: String }
-}, { timestamps: true });
+}, opciones);
 
+// Rendimiento = libras de queso por lata de leche = (kg × 2) ÷ (litros ÷ 20)
 produccionSchema.pre('save', function(next) {
-  if (this.litrosUsados && this.kgProducidos) {
-    this.rendimiento = parseFloat((this.litrosUsados / this.kgProducidos).toFixed(2));
-  }
+  if (this.litrosUsados && this.kgProducidos) this.rendimiento = librasPorLata(this.kgProducidos, this.litrosUsados);
   next();
 });
 
@@ -37,14 +56,9 @@ const precioSchema = new mongoose.Schema({
   anio: { type: Number, required: true },
   fechaInicio: { type: Date, required: true },
   fechaFin: { type: Date, required: true },
-  precioPorKg: { type: Number, required: true, min: 0 },
+  precioPorKg: decimal({ required: true, min: 0 }),
   activo: { type: Boolean, default: true }
-}, { timestamps: true });
-
-precioSchema.virtual('precioPorLibra').get(function() {
-  return parseFloat((this.precioPorKg / 2.2046).toFixed(0));
-});
-precioSchema.set('toJSON', { virtuals: true });
+}, opciones);
 
 // ── Ventas ───────────────────────────────────────────────────────────────────
 const ventaSchema = new mongoose.Schema({
@@ -55,34 +69,34 @@ const ventaSchema = new mongoose.Schema({
   clienteId: { type: mongoose.Schema.Types.ObjectId, ref: 'Cliente', index: true },
   // Producto descontado del inventario (opcional)
   productoId: { type: mongoose.Schema.Types.ObjectId, ref: 'Producto' },
-  cantidad: { type: Number, required: true, min: 0 },
+  cantidad: decimal({ required: true, min: 0 }),
   unidad: { type: String, enum: ['kg', 'libras'], required: true },
-  precioUnitario: { type: Number, required: true },
-  totalVenta: { type: Number, required: true },
+  precioUnitario: decimal({ required: true }),
+  totalVenta: decimal({ required: true }),
   precioRef: { type: mongoose.Schema.Types.ObjectId, ref: 'Precio' }
-}, { timestamps: true });
+}, opciones);
 
 // ── Producto (tipo de queso). El stock se guarda en kilos ──────────────────────
 const productoSchema = new mongoose.Schema({
   usuarioId: { type: mongoose.Schema.Types.ObjectId, ref: 'Usuario', required: true, index: true },
   nombre: { type: String, required: true, trim: true },
   descripcion: { type: String },
-  precioPorKg: { type: Number, default: 0, min: 0 },
-  stockKg: { type: Number, default: 0 },
-  stockMinimoKg: { type: Number, default: 0, min: 0 }
-}, { timestamps: true });
+  precioPorKg: decimal({ default: 0, min: 0 }),
+  stockKg: decimal({ default: 0 }),
+  stockMinimoKg: decimal({ default: 0, min: 0 })
+}, opciones);
 
 // ── Movimiento de inventario. cantidadKg > 0 entra, < 0 sale ───────────────────
 const movimientoSchema = new mongoose.Schema({
   usuarioId: { type: mongoose.Schema.Types.ObjectId, ref: 'Usuario', required: true, index: true },
   productoId: { type: mongoose.Schema.Types.ObjectId, ref: 'Producto', required: true, index: true },
   tipo: { type: String, enum: ['ENTRADA', 'SALIDA', 'AJUSTE'], required: true },
-  cantidadKg: { type: Number, required: true },
+  cantidadKg: decimal({ required: true }),
   motivo: { type: String },
   // Id de la venta o producción que originó el movimiento (si aplica)
   referencia: { type: String, index: true },
   fecha: { type: Date, default: Date.now }
-}, { timestamps: true });
+}, opciones);
 
 // ── Cliente ──────────────────────────────────────────────────────────────────
 const clienteSchema = new mongoose.Schema({
@@ -92,7 +106,7 @@ const clienteSchema = new mongoose.Schema({
   direccion: { type: String },
   tipo: { type: String, enum: ['Mayorista', 'Minorista'], default: 'Minorista' },
   notas: { type: String }
-}, { timestamps: true });
+}, opciones);
 
 // ── Ganadero (proveedor de leche) ────────────────────────────────────────────
 const ganaderoSchema = new mongoose.Schema({
@@ -100,7 +114,7 @@ const ganaderoSchema = new mongoose.Schema({
   nombre: { type: String, required: true, trim: true },
   telefono: { type: String },
   activo: { type: Boolean, default: true }
-}, { timestamps: true });
+}, opciones);
 
 // ── Precio del litro de leche, por semana (viernes a jueves) ──────────────────
 // Único lugar del costo del litro: lo usan las liquidaciones, Ganancias, Reportes y Precios.
@@ -108,8 +122,8 @@ const precioLecheSchema = new mongoose.Schema({
   usuarioId: { type: mongoose.Schema.Types.ObjectId, ref: 'Usuario', required: true, index: true },
   semana: { type: Number, required: true },
   anio: { type: Number, required: true },
-  precioLitro: { type: Number, required: true, min: 0 }
-}, { timestamps: true });
+  precioLitro: decimal({ required: true, min: 0 })
+}, opciones);
 precioLecheSchema.index({ usuarioId: 1, anio: 1, semana: 1 }, { unique: true });
 
 // ── Descuento al ganadero (se registra durante la semana y se resta en su liquidación) ──
@@ -120,10 +134,10 @@ const descuentoSchema = new mongoose.Schema({
   ganaderoId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ganadero', required: true, index: true },
   fecha: { type: Date, required: true },
   tipo: { type: String, enum: ['adelanto', 'prestamo', 'leche_rechazada', 'otro'], required: true },
-  valor: { type: Number, min: 0, default: 0 },
-  litros: { type: Number, min: 0 },
+  valor: decimal({ min: 0, default: 0 }),
+  litros: decimal({ min: 0 }),
   descripcion: { type: String }
-}, { timestamps: true });
+}, opciones);
 
 // ── Liquidación semanal (viernes a jueves) de un ganadero ─────────────────────
 // Mientras está pendiente se recalcula con la leche, el precio y los descuentos actuales;
@@ -138,29 +152,29 @@ const liquidacionSchema = new mongoose.Schema({
   anio: { type: Number, required: true },
   fechaInicio: { type: Date, required: true },
   fechaFin: { type: Date, required: true },
-  dias: [{ _id: false, fecha: String, litros: Number, entregas: Number }],
-  litros: { type: Number, required: true },
-  precioLitro: { type: Number, required: true },
-  subtotal: { type: Number, required: true },
+  dias: [{ _id: false, fecha: String, litros: decimal(), entregas: Number }],
+  litros: decimal({ required: true }),
+  precioLitro: decimal({ required: true }),
+  subtotal: decimal({ required: true }),
   descuentos: [{
     _id: false,
     descuentoId: mongoose.Schema.Types.ObjectId,
     tipo: String,
     fecha: Date,
     descripcion: String,
-    litros: Number,
-    valor: Number
+    litros: decimal(),
+    valor: decimal()
   }],
-  totalDescuentos: { type: Number, default: 0 },
-  total: { type: Number, required: true },
+  totalDescuentos: decimal({ default: 0 }),
+  total: decimal({ required: true }),
   estado: { type: String, enum: ['pendiente', 'pagado'], default: 'pendiente' },
   // Lo que se pagó. Si después se corrige la semana (con confirmación), `total` cambia y
   // la diferencia con este valor es lo que queda por ajustar con el ganadero.
-  totalPagado: { type: Number },
+  totalPagado: decimal(),
   fechaPago: { type: Date },
   formaPago: { type: String, enum: ['efectivo', 'nequi', 'transferencia'] },
   notas: { type: String }
-}, { timestamps: true });
+}, opciones);
 liquidacionSchema.index({ usuarioId: 1, ganaderoId: 1, anio: 1, semana: 1 }, { unique: true });
 liquidacionSchema.index({ usuarioId: 1, numero: 1 }, { unique: true });
 
@@ -181,17 +195,17 @@ const cierreSemanaSchema = new mongoose.Schema({
   anio: { type: Number, required: true },
   fechaInicio: { type: Date, required: true },
   fechaFin: { type: Date, required: true },
-  stockInicialKg: { type: Number, default: 0 },
-  kgProducidos: { type: Number, default: 0 },
-  kgVendidos: { type: Number, default: 0 },
-  kgFinal: { type: Number, default: 0, min: 0 },
+  stockInicialKg: decimal({ default: 0 }),
+  kgProducidos: decimal({ default: 0 }),
+  kgVendidos: decimal({ default: 0 }),
+  kgFinal: decimal({ default: 0, min: 0 }),
   // true cuando el usuario confirmó cuánto queso pasó a la semana siguiente
   confirmado: { type: Boolean, default: false },
-  mermaKg: { type: Number, default: 0 },
-  mermaPct: { type: Number, default: 0 },
-  precioPorKg: { type: Number, default: 0 },
-  valorMerma: { type: Number, default: 0 }
-}, { timestamps: true });
+  mermaKg: decimal({ default: 0 }),
+  mermaPct: decimal({ default: 0 }),
+  precioPorKg: decimal({ default: 0 }),
+  valorMerma: decimal({ default: 0 })
+}, opciones);
 cierreSemanaSchema.index({ usuarioId: 1, anio: 1, semana: 1 }, { unique: true });
 
 module.exports = {

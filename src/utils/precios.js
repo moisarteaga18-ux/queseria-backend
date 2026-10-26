@@ -8,7 +8,7 @@ const { errorHttp } = require('./inventario');
 const { rangoSemana } = require('./semana');
 const { pagadasAfectadas, exigirConfirmacion, recalcularPagadas } = require('./liquidacion');
 
-const LIBRAS_POR_KG = 2.2046;
+const unidades = require('./unidades');
 
 /**
  * Precio del queso de una semana: el registrado con ese número de semana o, para precios
@@ -30,7 +30,7 @@ function precioSemana(semana, anio, queso, leche) {
     fechaInicio: queso?.fechaInicio ?? rango.inicio,
     fechaFin: queso?.fechaFin ?? rango.fin,
     precioPorKg: queso?.precioPorKg ?? null,
-    precioPorLibra: queso ? parseFloat((queso.precioPorKg / LIBRAS_POR_KG).toFixed(0)) : null,
+    precioPorLibra: queso ? unidades.precioPorLibra(queso.precioPorKg) : null,
     precioLitro: leche?.precioLitro ?? null,
     activo: queso?.activo ?? false
   };

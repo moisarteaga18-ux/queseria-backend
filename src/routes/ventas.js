@@ -3,7 +3,7 @@ const { Venta, Precio, Cliente } = require('../models');
 const { errorHttp, responderError, registrarMovimiento, revertirReferencia, reemplazarMovimiento } = require('../utils/inventario');
 const { textoOpcional } = require('../utils/texto');
 
-const LIBRAS_POR_KG = 2.2046;
+const { aKg } = require('../utils/unidades');
 
 router.get('/', async (req, res) => {
   try {
@@ -56,7 +56,7 @@ router.post('/', async (req, res) => {
     });
 
     if (productoId) {
-      const kg = unidad === 'libras' ? cantidad / LIBRAS_POR_KG : Number(cantidad);
+      const kg = aKg(cantidad, unidad);
       try {
         await registrarMovimiento(req.usuarioId, {
           productoId, tipo: 'SALIDA', cantidadKg: -kg,
@@ -110,7 +110,7 @@ router.put('/:id', async (req, res) => {
 
     await reemplazarMovimiento(req.usuarioId, venta._id, venta.productoId && {
       productoId: venta.productoId, tipo: 'SALIDA',
-      cantidadKg: -(venta.unidad === 'libras' ? venta.cantidad / LIBRAS_POR_KG : venta.cantidad),
+      cantidadKg: -aKg(venta.cantidad, venta.unidad),
       motivo: 'Venta' + (venta.cliente ? ` a ${venta.cliente}` : ''), fecha: venta.fecha
     });
     await venta.save();

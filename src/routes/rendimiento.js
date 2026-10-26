@@ -2,8 +2,7 @@ const router = require('express').Router();
 const { Produccion } = require('../models');
 const { semanaDeFecha, rangoSemana, textoRango, iso } = require('../utils/semana');
 
-const LITROS_POR_LATA = 20;
-const LIBRAS_POR_KG = 2.2046;
+const { LIBRAS_POR_KG, LITROS_POR_LATA } = require('../utils/unidades');
 const redondear = (n) => parseFloat(n.toFixed(2));
 
 // GET /api/rendimiento/semanal — libras de queso por lata, por semana (viernes a jueves)

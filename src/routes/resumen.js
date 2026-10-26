@@ -2,6 +2,7 @@ const router = require('express').Router();
 const { Leche, Produccion, Venta, Precio, PrecioLeche } = require('../models');
 const { semanaDeFecha, semanaDeQuery, semanaAnterior: semanaPrevia, rangoSemana, textoRango } = require('../utils/semana');
 const { calcularMerma } = require('../utils/merma');
+const { LIBRAS_POR_KG, librasPorLata } = require('../utils/unidades');
 
 /**
  * Merma (kg) de una semana: la calculada al cierre o, para la semana en curso, la estimada
@@ -79,7 +80,7 @@ router.get('/hoy', async (req, res) => {
     ]);
     const producidoTotal = totalProducidoHistorico[0]?.total || 0;
     const vendidoKg = totalVendidoKg[0]?.total || 0;
-    const vendidoLibrasEnKg = (totalVendidoLibras[0]?.total || 0) / 2.2046;
+    const vendidoLibrasEnKg = (totalVendidoLibras[0]?.total || 0) / LIBRAS_POR_KG;
     const stockActualKg = parseFloat((producidoTotal - vendidoKg - vendidoLibrasEnKg).toFixed(2));
 
     const litrosHoy = leche[0]?.totalLitros || 0;
@@ -210,7 +211,7 @@ router.get('/semanas', async (req, res) => {
         ganancia: parseFloat((ingresos - costoLeche).toFixed(2)),
         kgProducidos: kg,
         // Libras de queso por lata (20 L) de leche usada
-        librasPorLata: litrosUsados > 0 ? parseFloat((kg * 2.2046 / (litrosUsados / 20)).toFixed(2)) : 0,
+        librasPorLata: librasPorLata(kg, litrosUsados),
         ...(() => { const m = mermaDeSemana(merma, semana, anio); return { mermaKg: m.kg, mermaPct: m.pct, mermaEstimada: m.estimada }; })()
       });
     }
