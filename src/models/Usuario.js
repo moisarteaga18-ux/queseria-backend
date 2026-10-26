@@ -6,7 +6,14 @@ const usuarioSchema = new mongoose.Schema({
   password: { type: String, required: true },
   nombreNegocio: { type: String, default: 'Mi Quesería' },
   email: { type: String, lowercase: true },
-  activo: { type: Boolean, default: true }
+  // Datos del perfil (opcionales)
+  propietario: { type: String },
+  telefono: { type: String },
+  direccion: { type: String },
+  nit: { type: String },
+  activo: { type: Boolean, default: true },
+  // Los tokens emitidos antes de esta fecha dejan de valer (al cambiar la contraseña)
+  passwordCambiadoEn: { type: Date }
 }, { timestamps: true });
 
 // Antes de guardar, encripta la contraseña
