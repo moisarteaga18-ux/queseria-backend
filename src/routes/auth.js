@@ -1,9 +1,11 @@
 const router = require('express').Router();
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const Usuario = require('../models/Usuario');
 const { JWT_SECRET, JWT_ALGORITMO, JWT_DURACION } = require('../config');
 const { verificarToken } = require('../middleware/auth');
 const limite = require('../utils/limite');
+const { configurado: correoConfigurado, enviarCorreo } = require('../utils/correo');
 
 const MAX_FALLOS_USUARIO = 10; // por usuario (desde cualquier IP), cada 15 minutos
 const MAX_FALLOS_IP = 30;      // por IP, cada 15 minutos
@@ -96,7 +98,7 @@ router.post('/login', async (req, res) => {
   }
 });
 
-const CAMPOS_PRIVADOS = '-password -passwordCambiadoEn';
+const CAMPOS_PRIVADOS = '-password -passwordCambiadoEn -recuperacionCodigo -recuperacionVence -recuperacionIntentos';
 
 // GET /api/auth/perfil - obtener datos del usuario actual
 router.get('/perfil', verificarToken, async (req, res) => {
@@ -188,5 +190,134 @@ router.put('/contrasena', verificarToken, async (req, res) => {
     res.status(500).json({ ok: false, error: 'No se pudo cambiar la contraseña' });
   }
 });
+
+// ── Recuperar la contraseña por correo ──────────────────────────────────────────
+const CODIGO_MINUTOS = 15;
+const CODIGO_MAX_INTENTOS = 5;   // por código; al agotarse hay que pedir otro
+const MAX_SOLICITUDES_USUARIO = 3; // códigos por usuario cada 15 minutos
+const MAX_SOLICITUDES_IP = 10;
+const MAX_VERIFICACIONES_IP = 20;
+const MENSAJE_ENVIO = 'Si ese usuario tiene un correo registrado, te enviamos un código. ' +
+  'Revisa tu correo (también la carpeta de spam).';
+
+/** El código no se guarda: se guarda un HMAC con la clave del servidor (no se puede revertir sin ella). */
+function hashCodigo(usuarioId, codigo) {
+  return crypto.createHmac('sha256', JWT_SECRET).update(`${usuarioId}:${codigo}`).digest('hex');
+}
+
+function mismoHash(a, b) {
+  const x = Buffer.from(String(a)), y = Buffer.from(String(b));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+
+// POST /api/auth/recuperar  { username }
+// Envía un código de 6 dígitos al correo del usuario. La respuesta es la misma exista o no el
+// usuario (así no sirve para averiguar qué usuarios hay).
+router.post('/recuperar', async (req, res) => {
+  try {
+    const { username } = req.body || {};
+    if (!esTexto(username)) return res.status(400).json({ ok: false, error: 'Escribe tu usuario' });
+    if (!correoConfigurado()) {
+      return res.status(503).json({ ok: false, error: 'La recuperación por correo todavía no está configurada en el servidor' });
+    }
+
+    const nombre = username.toLowerCase().trim();
+    const claveUsuario = `rec:u:${nombre}`;
+    const claveIp = `rec:ip:${ipDe(req)}`;
+    if (limite.bloqueado(claveUsuario, MAX_SOLICITUDES_USUARIO) || limite.bloqueado(claveIp, MAX_SOLICITUDES_IP)) {
+      return res.status(429).json({ ok: false, error: 'Ya pediste varios códigos. Espera 15 minutos e intenta de nuevo.' });
+    }
+    limite.registrarFallo(claveUsuario);
+    limite.registrarFallo(claveIp);
+
+    const usuario = await Usuario.findOne({ username: nombre });
+    if (usuario && usuario.activo && usuario.email) {
+      const codigo = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+      usuario.recuperacionCodigo = hashCodigo(usuario._id, codigo);
+      usuario.recuperacionVence = new Date(Date.now() + CODIGO_MINUTOS * 60 * 1000);
+      usuario.recuperacionIntentos = 0;
+      await usuario.save();
+      try {
+        await enviarCorreo({
+          para: usuario.email,
+          asunto: `Tu código de QuesoData: ${codigo}`,
+          texto: `Hola${usuario.nombreNegocio ? `, ${usuario.nombreNegocio}` : ''}.\n\n` +
+            `Tu código para cambiar la contraseña de QuesoData (usuario "${usuario.username}") es:\n\n` +
+            `${codigo}\n\nVence en ${CODIGO_MINUTOS} minutos. Si no lo pediste, ignora este correo: ` +
+            'tu contraseña no cambia.',
+          html: `<p>Hola${usuario.nombreNegocio ? `, ${escaparHtml(usuario.nombreNegocio)}` : ''}.</p>` +
+            `<p>Tu código para cambiar la contraseña de <b>QuesoData</b> (usuario "${escaparHtml(usuario.username)}") es:</p>` +
+            `<p style="font-size:32px;font-weight:bold;letter-spacing:6px;color:#1B5E20">${codigo}</p>` +
+            `<p>Vence en ${CODIGO_MINUTOS} minutos. Si no lo pediste, ignora este correo: tu contraseña no cambia.</p>`
+        });
+      } catch (e) {
+        console.error('No se pudo enviar el correo de recuperación:', e.message);
+        return res.status(502).json({ ok: false, error: 'No se pudo enviar el correo. Intenta más tarde.' });
+      }
+    }
+    res.json({ ok: true, data: { mensaje: MENSAJE_ENVIO, minutos: CODIGO_MINUTOS } });
+  } catch (e) {
+    console.error('Error en recuperar:', e);
+    res.status(500).json({ ok: false, error: 'No se pudo enviar el código' });
+  }
+});
+
+// POST /api/auth/restablecer  { username, codigo, nueva }
+// Con el código correcto cambia la contraseña, cierra las demás sesiones y deja la sesión abierta.
+router.post('/restablecer', async (req, res) => {
+  try {
+    const { username, codigo, nueva } = req.body || {};
+    if (!esTexto(username) || !esTexto(codigo) || !esTexto(nueva)) {
+      return res.status(400).json({ ok: false, error: 'Escribe el código y la contraseña nueva' });
+    }
+    if (nueva.length < 6) {
+      return res.status(400).json({ ok: false, error: 'La contraseña nueva debe tener al menos 6 caracteres' });
+    }
+    if (nueva.length > 100) {
+      return res.status(400).json({ ok: false, error: 'La contraseña nueva es demasiado larga' });
+    }
+    const claveIp = `restab:ip:${ipDe(req)}`;
+    if (limite.bloqueado(claveIp, MAX_VERIFICACIONES_IP)) {
+      return res.status(429).json({ ok: false, error: 'Demasiados intentos. Espera 15 minutos e intenta de nuevo.' });
+    }
+
+    const invalido = 'El código no es correcto o ya venció. Pide uno nuevo si hace falta.';
+    const usuario = await Usuario.findOne({ username: username.toLowerCase().trim() });
+    if (!usuario || !usuario.activo || !usuario.recuperacionCodigo || !(usuario.recuperacionVence > new Date())) {
+      limite.registrarFallo(claveIp);
+      return res.status(400).json({ ok: false, error: invalido });
+    }
+    if (!mismoHash(usuario.recuperacionCodigo, hashCodigo(usuario._id, codigo.trim()))) {
+      limite.registrarFallo(claveIp);
+      usuario.recuperacionIntentos = (usuario.recuperacionIntentos || 0) + 1;
+      if (usuario.recuperacionIntentos >= CODIGO_MAX_INTENTOS) {
+        usuario.recuperacionCodigo = undefined; // agotado: hay que pedir otro
+        usuario.recuperacionVence = undefined;
+      }
+      await usuario.save();
+      return res.status(400).json({
+        ok: false,
+        error: usuario.recuperacionCodigo ? invalido : 'Escribiste mal el código varias veces. Pide uno nuevo.'
+      });
+    }
+
+    usuario.password = nueva; // se encripta al guardar
+    usuario.passwordCambiadoEn = new Date(Math.floor(Date.now() / 1000) * 1000);
+    usuario.recuperacionCodigo = undefined;
+    usuario.recuperacionVence = undefined;
+    usuario.recuperacionIntentos = 0;
+    await usuario.save();
+    limite.limpiar(`u:${usuario.username}`); // si estaba bloqueado por intentos de login
+    limite.limpiar(`rec:u:${usuario.username}`);
+    res.json({ ok: true, data: respuestaSesion(usuario) });
+  } catch (e) {
+    console.error('Error en restablecer:', e);
+    res.status(500).json({ ok: false, error: 'No se pudo cambiar la contraseña' });
+  }
+});
+
+function escaparHtml(t) {
+  return String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 
 module.exports = router;

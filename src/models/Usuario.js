@@ -13,7 +13,11 @@ const usuarioSchema = new mongoose.Schema({
   nit: { type: String },
   activo: { type: Boolean, default: true },
   // Los tokens emitidos antes de esta fecha dejan de valer (al cambiar la contraseña)
-  passwordCambiadoEn: { type: Date }
+  passwordCambiadoEn: { type: Date },
+  // Código para recuperar la contraseña por correo (se guarda su HMAC, nunca el código)
+  recuperacionCodigo: { type: String },
+  recuperacionVence: { type: Date },
+  recuperacionIntentos: { type: Number, default: 0 }
 }, { timestamps: true });
 
 // Antes de guardar, encripta la contraseña
