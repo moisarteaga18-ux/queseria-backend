@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { Types } = require('mongoose');
-const { Ganadero, Leche, PrecioLeche, Descuento, Liquidacion, Contador } = require('../models');
+const { Ganadero, Leche, PrecioLeche, Descuento, Liquidacion, LiquidacionAnulada, Contador } = require('../models');
 const { errorHttp, responderError } = require('../utils/inventario');
 const { rangoSemana, semanaDeFecha, semanaDeQuery, semanaAnterior, textoRango } = require('../utils/semana');
 const { textoOpcional } = require('../utils/texto');
@@ -41,7 +41,8 @@ function resumenLiquidacion(l) {
 
 // GET /api/liquidaciones/semana?semana=&anio=&fecha=  (fecha = día local del teléfono)
 // Por ganadero: litros, subtotal, descuentos, total y su liquidación (si existe).
-// Si la semana ya cerró (pasó el jueves) y hay precio, genera las liquidaciones que falten.
+// Si la semana ya cerró (pasó el jueves) y hay precio, genera las liquidaciones que falten
+// (salvo las que el usuario anuló: esas se generan a mano).
 router.get('/semana', async (req, res) => {
   try {
     const usuarioId = req.usuarioId;
@@ -62,8 +63,11 @@ router.get('/semana', async (req, res) => {
     const litrosDe = Object.fromEntries(lecheAgrupada.map(g => [String(g._id), g.litros]));
 
     if (cerrada && precio != null) {
+      const anulados = new Set((await LiquidacionAnulada.distinct('ganaderoId', { usuarioId, semana, anio })).map(String));
       for (const g of ganaderos) {
-        if (litrosDe[String(g._id)] > 0) await generar(usuarioId, g, semana, anio).catch(() => {});
+        if (litrosDe[String(g._id)] > 0 && !anulados.has(String(g._id))) {
+          await generar(usuarioId, g, semana, anio).catch(() => {});
+        }
       }
     }
 
@@ -349,11 +353,16 @@ router.put('/:id/pendiente', async (req, res) => {
   }
 });
 
-// DELETE /api/liquidaciones/:id — anula una liquidación pendiente (su número no se reutiliza)
+// DELETE /api/liquidaciones/:id — anula una liquidación pendiente (su número no se reutiliza
+// y queda en liquidaciones_anuladas, así la semana cerrada no la vuelve a generar sola)
 router.delete('/:id', async (req, res) => {
   try {
     const liq = await buscar(req);
     if (liq.estado === 'pagado') throw errorHttp(400, 'Una liquidación pagada no se puede eliminar; primero deshaz el pago');
+    await LiquidacionAnulada.create({
+      usuarioId: req.usuarioId, ganaderoId: liq.ganaderoId, nombreGanadero: liq.nombreGanadero,
+      numero: liq.numero, semana: liq.semana, anio: liq.anio, total: liq.total
+    });
     await liq.deleteOne();
     res.json({ ok: true });
   } catch (e) {

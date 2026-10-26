@@ -178,6 +178,21 @@ const liquidacionSchema = new mongoose.Schema({
 liquidacionSchema.index({ usuarioId: 1, ganaderoId: 1, anio: 1, semana: 1 }, { unique: true });
 liquidacionSchema.index({ usuarioId: 1, numero: 1 }, { unique: true });
 
+// ── Liquidaciones anuladas (historial) ──────────────────────────────────────────
+// Al consultar una semana cerrada no se vuelve a generar sola la de ese ganadero:
+// el usuario la anuló a propósito y la genera de nuevo a mano si la necesita.
+const liquidacionAnuladaSchema = new mongoose.Schema({
+  usuarioId: { type: mongoose.Schema.Types.ObjectId, ref: 'Usuario', required: true, index: true },
+  ganaderoId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ganadero', required: true },
+  nombreGanadero: { type: String },
+  numero: { type: Number, required: true },
+  semana: { type: Number, required: true },
+  anio: { type: Number, required: true },
+  total: decimal(),
+  fechaAnulacion: { type: Date, default: Date.now }
+}, opciones);
+liquidacionAnuladaSchema.index({ usuarioId: 1, anio: 1, semana: 1 });
+
 // ── Contadores por usuario (número consecutivo de liquidaciones) ───────────────
 const contadorSchema = new mongoose.Schema({
   usuarioId: { type: mongoose.Schema.Types.ObjectId, ref: 'Usuario', required: true },
@@ -220,6 +235,7 @@ module.exports = {
   PrecioLeche: mongoose.model('PrecioLeche', precioLecheSchema),
   Descuento: mongoose.model('Descuento', descuentoSchema),
   Liquidacion: mongoose.model('Liquidacion', liquidacionSchema, 'liquidaciones'),
+  LiquidacionAnulada: mongoose.model('LiquidacionAnulada', liquidacionAnuladaSchema, 'liquidaciones_anuladas'),
   Contador: mongoose.model('Contador', contadorSchema),
   CierreSemana: mongoose.model('CierreSemana', cierreSemanaSchema, 'cierres_semana')
 };

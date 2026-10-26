@@ -22,20 +22,29 @@ function responderError(res, e) {
  * actualización, así dos ventas simultáneas no pueden dejar el stock negativo).
  */
 async function registrarMovimiento(usuarioId, { productoId, tipo, cantidadKg, motivo, referencia, fecha }) {
-  const filtro = { _id: productoId, usuarioId };
-  if (tipo === 'SALIDA') filtro.stockKg = { $gte: -cantidadKg - 0.0001 };
-
-  const producto = await Producto.findOneAndUpdate(filtro, { $inc: { stockKg: cantidadKg } }, { new: true });
-  if (!producto) {
-    const existe = await Producto.findOne({ _id: productoId, usuarioId });
-    if (!existe) throw errorHttp(404, 'Producto no encontrado');
-    throw errorHttp(400, `Solo hay ${existe.stockKg.toFixed(2)} kg de ${existe.nombre} en stock`);
-  }
+  const producto = await sumarStock(usuarioId, productoId, cantidadKg);
   await Movimiento.create({
     usuarioId, productoId, tipo, cantidadKg, motivo,
     referencia: referencia ? String(referencia) : undefined,
     fecha: fecha || new Date()
   });
+  return producto;
+}
+
+/**
+ * Suma [deltaKg] al stock del producto. Si resta, solo se aplica cuando alcanza (la condición
+ * va en la misma actualización, así dos operaciones simultáneas no dejan el stock negativo).
+ */
+async function sumarStock(usuarioId, productoId, deltaKg) {
+  const filtro = { _id: productoId, usuarioId };
+  if (deltaKg < 0) filtro.stockKg = { $gte: -deltaKg - 0.0001 };
+
+  const producto = await Producto.findOneAndUpdate(filtro, { $inc: { stockKg: deltaKg } }, { new: true });
+  if (!producto) {
+    const existe = await Producto.findOne({ _id: productoId, usuarioId });
+    if (!existe) throw errorHttp(404, 'Producto no encontrado');
+    throw errorHttp(400, `Solo hay ${existe.stockKg.toFixed(2)} kg de ${existe.nombre} en stock`);
+  }
   return producto;
 }
 
@@ -69,4 +78,4 @@ async function reemplazarMovimiento(usuarioId, referencia, nuevo) {
   }
 }
 
-module.exports = { errorHttp, responderError, registrarMovimiento, revertirReferencia, reemplazarMovimiento };
+module.exports = { errorHttp, responderError, registrarMovimiento, sumarStock, revertirReferencia, reemplazarMovimiento };
