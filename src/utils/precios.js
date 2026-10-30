@@ -1,5 +1,6 @@
 // Precios de una semana (viernes a jueves):
-// - precio de venta del queso por kg → colección `precios` (Precio)
+// - precios de venta del queso por kg → colección `precios` (Precio): minorista (`precioPorKg`)
+//   y mayorista (`precioMayoristaPorKg`)
 // - precio del litro de leche        → colección `precioleches` (PrecioLeche), el único lugar del costo
 //   del litro. Lo usan las liquidaciones, Ganancias y Reportes; Precios lo muestra y lo edita.
 
@@ -30,7 +31,9 @@ function precioSemana(semana, anio, queso, leche) {
     fechaInicio: queso?.fechaInicio ?? rango.inicio,
     fechaFin: queso?.fechaFin ?? rango.fin,
     precioPorKg: queso?.precioPorKg ?? null,
-    precioPorLibra: queso ? unidades.precioPorLibra(queso.precioPorKg) : null,
+    precioPorLibra: queso?.precioPorKg != null ? unidades.precioPorLibra(queso.precioPorKg) : null,
+    precioMayoristaPorKg: queso?.precioMayoristaPorKg ?? null,
+    precioMayoristaPorLibra: queso?.precioMayoristaPorKg != null ? unidades.precioPorLibra(queso.precioMayoristaPorKg) : null,
     precioLitro: leche?.precioLitro ?? null,
     activo: queso?.activo ?? false
   };
@@ -58,20 +61,22 @@ async function fijarPrecioLitro(req, semana, anio, precioLitro) {
 }
 
 /**
- * Guarda el precio del queso de una semana: corrige el que ya existe (el más reciente de esa
- * semana) o crea uno nuevo. Solo queda "activo" el de la semana más reciente.
+ * Guarda los precios del queso de una semana ({ precioPorKg, precioMayoristaPorKg }; los que vienen
+ * en null no se cambian): corrige el que ya existe (el más reciente de esa semana) o crea uno nuevo.
+ * Solo queda "activo" el de la semana más reciente.
  */
-async function fijarPrecioQueso(usuarioId, semana, anio, precioPorKg) {
-  if (!(precioPorKg > 0)) throw errorHttp(400, 'Precio del queso inválido');
+async function fijarPrecioQueso(usuarioId, semana, anio, precios) {
+  const cambios = Object.fromEntries(Object.entries(precios).filter(([, v]) => v != null));
+  if (!Object.keys(cambios).length || Object.values(cambios).some(v => !(v > 0))) throw errorHttp(400, 'Precio del queso inválido');
   const existente = await precioQuesoDe(usuarioId, semana, anio);
   if (existente && existente.semana === semana && existente.anio === anio) {
-    existente.precioPorKg = precioPorKg;
+    existente.set(cambios);
     return existente.save();
   }
   const { inicio, fin } = rangoSemana(semana, anio);
   const esMasReciente = !(await Precio.exists({ usuarioId, fechaInicio: { $gt: inicio } }));
   if (esMasReciente) await Precio.updateMany({ usuarioId, activo: true }, { activo: false });
-  return Precio.create({ usuarioId, semana, anio, fechaInicio: inicio, fechaFin: fin, precioPorKg, activo: esMasReciente });
+  return Precio.create({ usuarioId, semana, anio, fechaInicio: inicio, fechaFin: fin, ...cambios, activo: esMasReciente });
 }
 
 module.exports = { precioQuesoDe, precioSemana, fijarPrecioLitro, fijarPrecioQueso };

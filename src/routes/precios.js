@@ -4,7 +4,7 @@ const { errorHttp, responderError } = require('../utils/inventario');
 const { semanaDeFecha, semanaDeQuery } = require('../utils/semana');
 const { precioQuesoDe, precioSemana, fijarPrecioLitro, fijarPrecioQueso } = require('../utils/precios');
 
-// Cada semana (viernes a jueves) tiene: precio del queso por kg (`precios`) y precio del litro de
+// Cada semana (viernes a jueves) tiene: precios del queso por kg, minorista y mayorista (`precios`), y precio del litro de
 // leche (`precioleches`, el mismo que usan las liquidaciones). Esta ruta los muestra y edita juntos.
 
 // GET /api/precios/actual?fecha=yyyy-MM-dd — precios de la semana que contiene esa fecha
@@ -48,8 +48,8 @@ router.get('/', async (req, res) => {
   }
 });
 
-// PUT /api/precios/semana  { semana, anio, precioPorKg, precioLitro, confirmar }
-// Crea o corrige los precios de una semana (cualquiera de los dos puede omitirse).
+// PUT /api/precios/semana  { semana, anio, precioPorKg, precioMayoristaPorKg, precioLitro, confirmar }
+// Crea o corrige los precios de una semana (cualquiera puede omitirse). precioPorKg = minorista.
 // Cambiar el precio del litro de una semana con liquidaciones pagadas pide confirmación (409).
 // POST /api/precios hace lo mismo (acepta también la forma anterior: fechaInicio y costoLitroLeche).
 async function guardarSemana(req, res) {
@@ -59,18 +59,22 @@ async function guardarSemana(req, res) {
       : semanaDeFecha(req.body.fechaInicio ? new Date(req.body.fechaInicio) : new Date());
     const leer = (v) => (v === undefined || v === null || v === '' ? null : Number(v));
     const precioPorKg = leer(req.body.precioPorKg);
+    const precioMayoristaPorKg = leer(req.body.precioMayoristaPorKg);
     // En la forma anterior costoLitroLeche: 0 significaba "sin definir"
     const precioLitro = leer(req.body.precioLitro ?? (Number(req.body.costoLitroLeche) > 0 ? req.body.costoLitroLeche : null));
-    if (precioPorKg == null && precioLitro == null) throw errorHttp(400, 'Ingresa el precio del queso o el del litro de leche');
-    if (precioPorKg != null && !(precioPorKg > 0)) throw errorHttp(400, 'Precio del queso inválido');
+    if (precioPorKg == null && precioMayoristaPorKg == null && precioLitro == null) {
+      throw errorHttp(400, 'Ingresa el precio del queso o el del litro de leche');
+    }
+    if (precioPorKg != null && !(precioPorKg > 0)) throw errorHttp(400, 'Precio minorista inválido');
+    if (precioMayoristaPorKg != null && !(precioMayoristaPorKg > 0)) throw errorHttp(400, 'Precio mayorista inválido');
     if (precioLitro != null && !(precioLitro > 0)) throw errorHttp(400, 'Precio del litro inválido');
 
     // Primero el litro: si pide confirmación, no se guarda nada
     const leche = precioLitro != null
       ? await fijarPrecioLitro(req, semana, anio, precioLitro)
       : await PrecioLeche.findOne({ usuarioId: req.usuarioId, semana, anio });
-    const queso = precioPorKg != null
-      ? await fijarPrecioQueso(req.usuarioId, semana, anio, precioPorKg)
+    const queso = precioPorKg != null || precioMayoristaPorKg != null
+      ? await fijarPrecioQueso(req.usuarioId, semana, anio, { precioPorKg, precioMayoristaPorKg })
       : await precioQuesoDe(req.usuarioId, semana, anio);
     res.status(req.method === 'POST' ? 201 : 200).json({ ok: true, data: precioSemana(semana, anio, queso, leche) });
   } catch (e) {

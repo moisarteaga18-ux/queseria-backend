@@ -56,7 +56,9 @@ const precioSchema = new mongoose.Schema({
   anio: { type: Number, required: true },
   fechaInicio: { type: Date, required: true },
   fechaFin: { type: Date, required: true },
-  precioPorKg: decimal({ required: true, min: 0 }),
+  // Precio al por menor (minorista) y al por mayor, ambos por kg; cualquiera de los dos puede faltar
+  precioPorKg: decimal({ min: 0 }),
+  precioMayoristaPorKg: decimal({ min: 0 }),
   activo: { type: Boolean, default: true }
 }, opciones);
 
