@@ -240,7 +240,7 @@ router.get('/resumen', async (req, res) => {
 router.put('/precio', async (req, res) => {
   try {
     const { semana, anio } = leerSemana(req.body);
-    const precio = await fijarPrecioLitro(req, semana, anio, Number(req.body.precioLitro));
+    const precio = await fijarPrecioLitro(req, semana, anio, req.body.precioLitro);
     res.json({ ok: true, data: precio });
   } catch (e) {
     responderError(res, e);

@@ -3,6 +3,7 @@ const { Precio, PrecioLeche } = require('../models');
 const { errorHttp, responderError } = require('../utils/inventario');
 const { semanaDeFecha, semanaDeQuery } = require('../utils/semana');
 const { precioQuesoDe, precioSemana, fijarPrecioLitro, fijarPrecioQueso } = require('../utils/precios');
+const { positivoOpcional } = require('../utils/validar');
 
 // Cada semana (viernes a jueves) tiene: precios del queso por kg, minorista y mayorista (`precios`), y precio del litro de
 // leche (`precioleches`, el mismo que usan las liquidaciones). Esta ruta los muestra y edita juntos.
@@ -57,17 +58,15 @@ async function guardarSemana(req, res) {
     const { semana, anio } = Number(req.body.semana) && Number(req.body.anio)
       ? { semana: Number(req.body.semana), anio: Number(req.body.anio) }
       : semanaDeFecha(req.body.fechaInicio ? new Date(req.body.fechaInicio) : new Date());
-    const leer = (v) => (v === undefined || v === null || v === '' ? null : Number(v));
-    const precioPorKg = leer(req.body.precioPorKg);
-    const precioMayoristaPorKg = leer(req.body.precioMayoristaPorKg);
+    // Cada precio es opcional (vacío = no se cambia), pero si viene debe ser un número mayor que 0
+    const precioPorKg = positivoOpcional(req.body.precioPorKg, 'precioPorKg');
+    const precioMayoristaPorKg = positivoOpcional(req.body.precioMayoristaPorKg, 'precioMayoristaPorKg');
     // En la forma anterior costoLitroLeche: 0 significaba "sin definir"
-    const precioLitro = leer(req.body.precioLitro ?? (Number(req.body.costoLitroLeche) > 0 ? req.body.costoLitroLeche : null));
+    const precioLitro = positivoOpcional(
+      req.body.precioLitro ?? (Number(req.body.costoLitroLeche) > 0 ? req.body.costoLitroLeche : null), 'precioLitro');
     if (precioPorKg == null && precioMayoristaPorKg == null && precioLitro == null) {
       throw errorHttp(400, 'Ingresa el precio del queso o el del litro de leche');
     }
-    if (precioPorKg != null && !(precioPorKg > 0)) throw errorHttp(400, 'Precio minorista inválido');
-    if (precioMayoristaPorKg != null && !(precioMayoristaPorKg > 0)) throw errorHttp(400, 'Precio mayorista inválido');
-    if (precioLitro != null && !(precioLitro > 0)) throw errorHttp(400, 'Precio del litro inválido');
 
     // Primero el litro: si pide confirmación, no se guarda nada
     const leche = precioLitro != null

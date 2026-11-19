@@ -10,6 +10,7 @@ const { rangoSemana } = require('./semana');
 const { pagadasAfectadas, exigirConfirmacion, recalcularPagadas } = require('./liquidacion');
 
 const unidades = require('./unidades');
+const { positivo } = require('./validar');
 
 /**
  * Precio del queso de una semana: el registrado con ese número de semana o, para precios
@@ -43,8 +44,8 @@ function precioSemana(semana, anio, queso, leche) {
  * Guarda el precio del litro de una semana. Si cambia y la semana tiene liquidaciones pagadas,
  * exige confirmación (409) y, confirmado, las recalcula (las pendientes se recalculan solas).
  */
-async function fijarPrecioLitro(req, semana, anio, precioLitro) {
-  if (!(precioLitro > 0)) throw errorHttp(400, 'Precio por litro inválido');
+async function fijarPrecioLitro(req, semana, anio, valorLitro) {
+  const precioLitro = positivo(valorLitro, 'precioLitro');
   const usuarioId = req.usuarioId;
   const anterior = await PrecioLeche.findOne({ usuarioId, semana, anio });
   if (anterior?.precioLitro === precioLitro) return anterior;

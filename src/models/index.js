@@ -5,13 +5,18 @@ const { librasPorLata } = require('../utils/unidades');
  * Número decimal: se guarda SIEMPRE como double en MongoDB (con Number, los valores sin decimales
  * quedaban como int y Atlas mostraba el campo con tipo mixto) y en el código se lee como número.
  * [min]: el tipo Double no aplica la regla min de Mongoose, por eso va como validador.
+ * [positivo]: debe ser mayor que 0 (litros, kilos, cantidades y precios). Es la última defensa: las
+ * rutas ya validan con utils/validar.js y responden un mensaje más claro.
  */
-function decimal({ min, ...resto } = {}) {
+function decimal({ min, positivo, ...resto } = {}) {
   return {
     type: mongoose.Schema.Types.Double,
     get: (v) => (v == null ? v : Number(v)),
     ...(min !== undefined && {
       validate: { validator: (v) => v == null || Number(v) >= min, message: '{PATH} no puede ser menor que ' + min }
+    }),
+    ...(positivo && {
+      validate: { validator: (v) => v == null || Number(v) > 0, message: '{PATH} debe ser mayor que 0' }
     }),
     ...resto
   };
@@ -23,7 +28,7 @@ const opciones = { timestamps: true, toJSON: { getters: true }, toObject: { gett
 const lecheSchema = new mongoose.Schema({
   usuarioId: { type: mongoose.Schema.Types.ObjectId, ref: 'Usuario', required: true, index: true },
   fecha: { type: Date, required: true, default: Date.now },
-  litros: decimal({ required: true, min: 0 }),
+  litros: decimal({ required: true, positivo: true }),
   // El nombre se toma siempre del ganadero (el campo viejo `proveedor` se migró y eliminó)
   ganaderoId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ganadero', required: true, index: true },
   observaciones: { type: String }
@@ -33,8 +38,8 @@ const lecheSchema = new mongoose.Schema({
 const produccionSchema = new mongoose.Schema({
   usuarioId: { type: mongoose.Schema.Types.ObjectId, ref: 'Usuario', required: true, index: true },
   fecha: { type: Date, required: true, default: Date.now },
-  litrosUsados: decimal({ required: true }),
-  kgProducidos: decimal({ required: true }),
+  litrosUsados: decimal({ required: true, positivo: true }),
+  kgProducidos: decimal({ required: true, positivo: true }),
   // Libras de queso por lata (ver pre('save'))
   rendimiento: decimal(),
   // Producto al que se sumó el queso en el inventario (opcional)
@@ -57,8 +62,8 @@ const precioSchema = new mongoose.Schema({
   fechaInicio: { type: Date, required: true },
   fechaFin: { type: Date, required: true },
   // Precio al por menor (minorista) y al por mayor, ambos por kg; cualquiera de los dos puede faltar
-  precioPorKg: decimal({ min: 0 }),
-  precioMayoristaPorKg: decimal({ min: 0 }),
+  precioPorKg: decimal({ positivo: true }),
+  precioMayoristaPorKg: decimal({ positivo: true }),
   activo: { type: Boolean, default: true }
 }, opciones);
 
@@ -71,9 +76,9 @@ const ventaSchema = new mongoose.Schema({
   clienteId: { type: mongoose.Schema.Types.ObjectId, ref: 'Cliente', index: true },
   // Producto descontado del inventario (opcional)
   productoId: { type: mongoose.Schema.Types.ObjectId, ref: 'Producto' },
-  cantidad: decimal({ required: true, min: 0 }),
+  cantidad: decimal({ required: true, positivo: true }),
   unidad: { type: String, enum: ['kg', 'libras'], required: true },
-  precioUnitario: decimal({ required: true }),
+  precioUnitario: decimal({ required: true, positivo: true }),
   totalVenta: decimal({ required: true }),
   precioRef: { type: mongoose.Schema.Types.ObjectId, ref: 'Precio' }
 }, opciones);
@@ -124,7 +129,7 @@ const precioLecheSchema = new mongoose.Schema({
   usuarioId: { type: mongoose.Schema.Types.ObjectId, ref: 'Usuario', required: true, index: true },
   semana: { type: Number, required: true },
   anio: { type: Number, required: true },
-  precioLitro: decimal({ required: true, min: 0 })
+  precioLitro: decimal({ required: true, positivo: true })
 }, opciones);
 precioLecheSchema.index({ usuarioId: 1, anio: 1, semana: 1 }, { unique: true });
 

@@ -2,6 +2,7 @@ const router = require('express').Router();
 const { Produccion } = require('../models');
 const { errorHttp, responderError, registrarMovimiento, revertirReferencia, reemplazarMovimiento } = require('../utils/inventario');
 const { textoOpcional } = require('../utils/texto');
+const { positivo } = require('../utils/validar');
 
 router.get('/', async (req, res) => {
   try {
@@ -18,8 +19,10 @@ router.get('/', async (req, res) => {
 // Con productoId, el queso producido se suma al inventario de ese producto.
 router.post('/', async (req, res) => {
   try {
-    const { fecha, litrosUsados, kgProducidos, observaciones, productoId } = req.body;
-    if (!litrosUsados || !kgProducidos) return res.status(400).json({ ok: false, error: 'Faltan datos' });
+    const { fecha, observaciones, productoId } = req.body;
+    // D-17: antes solo se comprobaba que no vinieran vacíos y se aceptaban negativos
+    const litrosUsados = positivo(req.body.litrosUsados, 'litrosUsados');
+    const kgProducidos = positivo(req.body.kgProducidos, 'kgProducidos');
     const registro = await Produccion.create({
       usuarioId: req.usuarioId,
       fecha: fecha || new Date(),
@@ -51,10 +54,8 @@ router.put('/:id', async (req, res) => {
     const registro = await Produccion.findOne({ _id: req.params.id, usuarioId: req.usuarioId });
     if (!registro) throw errorHttp(404, 'Producción no encontrada');
     const { fecha, litrosUsados, kgProducidos, observaciones } = req.body;
-    if (litrosUsados !== undefined && !(Number(litrosUsados) > 0)) throw errorHttp(400, 'Litros inválidos');
-    if (kgProducidos !== undefined && !(Number(kgProducidos) > 0)) throw errorHttp(400, 'Kilos inválidos');
-    if (litrosUsados !== undefined) registro.litrosUsados = Number(litrosUsados);
-    if (kgProducidos !== undefined) registro.kgProducidos = Number(kgProducidos);
+    if (litrosUsados !== undefined) registro.litrosUsados = positivo(litrosUsados, 'litrosUsados');
+    if (kgProducidos !== undefined) registro.kgProducidos = positivo(kgProducidos, 'kgProducidos');
     if (fecha) registro.fecha = new Date(fecha);
     if (observaciones !== undefined) registro.observaciones = textoOpcional(observaciones);
     // productoId: null o "" = ya no se suma al inventario

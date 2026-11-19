@@ -1,0 +1,2 @@
+# Los .cmd de Windows necesitan CRLF: con LF, cmd.exe interpreta mal algunas lineas
+*.cmd text eol=crlf

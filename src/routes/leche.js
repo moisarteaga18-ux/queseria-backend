@@ -4,6 +4,7 @@ const { Leche, Ganadero, Produccion } = require('../models');
 const { errorHttp, responderError } = require('../utils/inventario');
 const { DIA_MS, iso } = require('../utils/semana');
 const { textoOpcional } = require('../utils/texto');
+const { positivo } = require('../utils/validar');
 const { pagadasAfectadas, exigirConfirmacion, recalcularPagadas } = require('../utils/liquidacion');
 
 /** "yyyy-MM-dd" → medianoche UTC (así se guardan las fechas que manda la app). */
@@ -92,8 +93,8 @@ router.get('/dias', async (req, res) => {
 // Si el ganadero ya tiene pagada la liquidación de esa semana, pide confirmación (409).
 router.post('/', async (req, res) => {
   try {
-    const { fecha, litros, ganaderoId, observaciones } = req.body;
-    if (!(Number(litros) > 0)) throw errorHttp(400, 'Litros inválidos');
+    const { fecha, ganaderoId, observaciones } = req.body;
+    const litros = positivo(req.body.litros, 'litros');
     const ganadero = await ganaderoDe(req.usuarioId, ganaderoId);
     const dia = fecha ? new Date(fecha) : new Date();
 
@@ -102,7 +103,7 @@ router.post('/', async (req, res) => {
     const registro = await Leche.create({
       usuarioId: req.usuarioId,
       fecha: dia,
-      litros: Number(litros),
+      litros,
       ganaderoId: ganadero._id,
       observaciones: textoOpcional(observaciones)
     });
@@ -122,10 +123,7 @@ router.put('/:id', async (req, res) => {
     if (!registro) throw errorHttp(404, 'Registro no encontrado');
     const antes = { ganaderoId: registro.ganaderoId, fecha: registro.fecha };
     const { fecha, litros, ganaderoId, observaciones } = req.body;
-    if (litros !== undefined) {
-      if (!(Number(litros) > 0)) throw errorHttp(400, 'Litros inválidos');
-      registro.litros = Number(litros);
-    }
+    if (litros !== undefined) registro.litros = positivo(litros, 'litros');
     if (fecha) registro.fecha = new Date(fecha);
     if (ganaderoId) registro.ganaderoId = (await ganaderoDe(req.usuarioId, ganaderoId))._id;
     if (observaciones !== undefined) registro.observaciones = textoOpcional(observaciones);

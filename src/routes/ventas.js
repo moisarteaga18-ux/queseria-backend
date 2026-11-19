@@ -2,6 +2,7 @@ const router = require('express').Router();
 const { Venta, Precio, Cliente } = require('../models');
 const { errorHttp, responderError, registrarMovimiento, revertirReferencia, reemplazarMovimiento } = require('../utils/inventario');
 const { textoOpcional } = require('../utils/texto');
+const { positivo } = require('../utils/validar');
 
 const { aKg } = require('../utils/unidades');
 
@@ -27,8 +28,10 @@ router.get('/', async (req, res) => {
 // Con productoId, la cantidad se descuenta del inventario (falla si no hay stock suficiente).
 router.post('/', async (req, res) => {
   try {
-    const { fecha, tipoVenta, clienteId, productoId, cantidad, unidad, precioUnitario } = req.body;
-    if (!cantidad || !tipoVenta || !precioUnitario) return res.status(400).json({ ok: false, error: 'Faltan datos' });
+    const { fecha, tipoVenta, clienteId, productoId, unidad } = req.body;
+    if (!tipoVenta) throw errorHttp(400, 'Elige el tipo de venta (mayorista o minorista)');
+    const cantidad = positivo(req.body.cantidad, 'cantidad');
+    const precioUnitario = positivo(req.body.precioUnitario, 'precioUnitario');
 
     let cliente = textoOpcional(req.body.cliente);
     if (clienteId) {
@@ -85,14 +88,8 @@ router.put('/:id', async (req, res) => {
     if (b.tipoVenta !== undefined) venta.tipoVenta = b.tipoVenta;
     if (b.unidad !== undefined) venta.unidad = b.unidad;
     if (b.fecha) venta.fecha = new Date(b.fecha);
-    if (b.cantidad !== undefined) {
-      if (!(Number(b.cantidad) > 0)) throw errorHttp(400, 'Cantidad inválida');
-      venta.cantidad = Number(b.cantidad);
-    }
-    if (b.precioUnitario !== undefined) {
-      if (!(Number(b.precioUnitario) > 0)) throw errorHttp(400, 'Precio inválido');
-      venta.precioUnitario = Number(b.precioUnitario);
-    }
+    if (b.cantidad !== undefined) venta.cantidad = positivo(b.cantidad, 'cantidad');
+    if (b.precioUnitario !== undefined) venta.precioUnitario = positivo(b.precioUnitario, 'precioUnitario');
     if (b.clienteId !== undefined || b.cliente !== undefined) {
       let cliente = textoOpcional(b.cliente);
       venta.clienteId = undefined;

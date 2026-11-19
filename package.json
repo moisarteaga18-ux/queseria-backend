@@ -8,7 +8,13 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "dev": "nodemon src/index.js"
+    "dev": "nodemon src/index.js",
+    "test": "node --test --test-concurrency=1 \"test/*.test.js\""
+  },
+  "config": {
+    "mongodbMemoryServer": {
+      "version": "7.0.14"
+    }
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -19,6 +25,7 @@
     "mongoose": "^8.24.7"
   },
   "devDependencies": {
+    "mongodb-memory-server": "11.3.0",
     "nodemon": "^3.0.1"
   },
   "overrides": {
