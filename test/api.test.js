@@ -2,12 +2,12 @@
 // consultas (resumen, reportes, liquidación, merma) y seguridad básica.
 // Corre contra una MongoDB temporal en memoria (ver test/ayuda.js), nunca contra la base real.
 //
-// Datos: todo cae en la última semana YA CERRADA (viernes a jueves), calculada con la fecha de hoy,
-// así la prueba da lo mismo cualquier día que se ejecute.
+// Datos: todo cae en la semana de HACE DOS SEMANAS (viernes a jueves), calculada con la fecha de hoy: ya
+// cerró y también terminó su viernes siguiente (su merma está completa), cualquier día que se ejecute.
 //   Leche: 20 registros de 100..119 L repartidos en los 7 días → 2.190 L; el martes (día 4): 104 + 111 + 118 = 333 L
 //   Producción (martes): 10 × (100 L → 10 kg) → 100 kg, rendimiento (10 × 2) ÷ (100 ÷ 20) = 4 lb por lata
 //   Ventas (martes): 10 × 2 libras (= 1 kg) a $ 9.000 la libra → $ 18.000 cada una, $ 180.000 y 10 kg en total
-//   Stock = 100 − 10 = 90 kg; merma de la semana (sin kg que pasen) = 90 kg
+//   Stock = 100 − 10 = 90 kg; merma de la semana (sin kg que pasen) = 90 kg = 90 % → "revisar" (más del 15 %)
 const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { iniciar, diaIso } = require('./ayuda');
@@ -17,7 +17,8 @@ const USUARIO = 'prueba_api';
 const CLAVE = 'clave123';
 
 const hoy = semanaDeFecha(new Date());
-const S = semanaAnterior(hoy.semana, hoy.anio); // última semana cerrada
+const pasada = semanaAnterior(hoy.semana, hoy.anio);
+const S = semanaAnterior(pasada.semana, pasada.anio); // hace dos semanas: cerrada y con su viernes siguiente terminado
 const VIERNES = rangoSemana(S.semana, S.anio).inicio;
 const MARTES = diaIso(VIERNES, 4);
 
@@ -138,15 +139,19 @@ describe('Consultas (10 rondas × 5)', () => {
       assert.equal(d.ganaderos[0].total, null);
     });
 
-    test(`ronda ${ronda}: GET /merma → semana cerrada con merma de 90 kg y pendiente de confirmar`, async () => {
+    test(`ronda ${ronda}: GET /merma → semana completa con merma de 90 kg (90 %) marcada para revisar`, async () => {
       const r = await llamar('GET', '/merma');
       assert.equal(r.status, 200);
       const s = r.body.data.semanas.find(x => x.semana === S.semana && x.anio === S.anio);
       assert.ok(s, 'falta la semana cerrada en la merma');
+      assert.equal(s.completa, true);
       assert.equal(s.kgProducidos, 100);
       assert.equal(s.kgVendidos, 10);
       assert.equal(s.mermaKg, 90);
-      assert.equal(r.body.data.pendiente?.semana, S.semana);
+      assert.equal(s.mermaPct, 90);
+      assert.ok(s.revisar, 'una merma de más del 15 % debe pedir revisar');
+      // Valor al precio promedio real: $ 180.000 ÷ 10 kg = $ 18.000/kg
+      assert.equal(s.valorMerma, 90 * 18000);
     });
   }
 });

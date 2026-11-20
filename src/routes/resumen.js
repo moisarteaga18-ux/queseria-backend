@@ -1,20 +1,31 @@
 const router = require('express').Router();
 const { Leche, Produccion, Venta, Precio, PrecioLeche } = require('../models');
 const { semanaDeFecha, semanaDeQuery, semanaAnterior: semanaPrevia, rangoSemana, textoRango } = require('../utils/semana');
-const { calcularMerma } = require('../utils/merma');
+const { cuentaDeUsuario } = require('../utils/merma');
 const { LIBRAS_POR_KG, librasPorLata } = require('../utils/unidades');
 
 /**
- * Merma (kg) de una semana: la calculada al cierre o, para la semana en curso, la estimada
- * con el % promedio histórico.
+ * Cuenta de una semana (utils/merma.js: ventas por lote, ganancia y merma) en el formato de Ganancias.
+ * Si la semana no tiene movimientos (o es anterior al primer registro), todo va en 0.
  */
-function mermaDeSemana(merma, semana, anio) {
-  const cierre = merma.semanas.find(c => c.semana === semana && c.anio === anio);
-  if (cierre) return { kg: cierre.mermaKg, pct: cierre.mermaPct, estimada: false };
-  if (merma.actual.semana === semana && merma.actual.anio === anio) {
-    return { kg: merma.actual.mermaEstimadaKg, pct: merma.promedioPct, estimada: true };
-  }
-  return { kg: 0, pct: 0, estimada: false };
+function cuentaDe(lista, { semana, anio }) {
+  const { inicio, fin } = rangoSemana(semana, anio);
+  const c = lista.find(s => s.semana === semana && s.anio === anio) || {
+    semana, anio, completa: true, stockInicialKg: 0, kgProducidos: 0, litrosUsados: 0, kgVendidos: 0,
+    kgVendidosViernesSiguiente: 0, kgPasados: 0, kgPorVender: 0, ventas: 0, litrosLeche: 0, costoLitro: 0,
+    costoLeche: 0, ganancia: 0, precioPromedioKg: null, precioRegistradoKg: null, mermaKg: 0, mermaPct: 0,
+    precioMermaKg: null, valorMerma: 0, revisar: null,
+    viernesSiguiente: new Date(fin.getTime() + 1).toISOString().slice(0, 10)
+  };
+  return {
+    ...c,
+    rango: { inicio, fin, texto: textoRango(inicio, fin) },
+    // Nombres que ya usaba la app
+    ingresos: c.ventas,
+    litrosComprados: c.litrosLeche,
+    precioVentaKg: c.precioMermaKg || 0,
+    mermaEstimada: false
+  };
 }
 
 /**
@@ -106,58 +117,18 @@ router.get('/hoy', async (req, res) => {
   }
 });
 
-// GET /api/resumen/ganancias - compara semana actual vs anterior
+// GET /api/resumen/ganancias?fecha=yyyy-MM-dd[&semana=&anio=] — una semana (la de hoy o la elegida) contra
+// la anterior. Ganancia = ventas del queso de la semana (por lote: incluye las del viernes siguiente)
+// − leche de la semana. La merma y la ganancia se completan al terminar el viernes siguiente (`completa`).
 router.get('/ganancias', async (req, res) => {
   try {
-    const usuarioId = req.usuarioId;
-    const ObjectId = require('mongoose').Types.ObjectId;
+    const hoy = req.query.fecha ? new Date(req.query.fecha) : new Date();
+    const elegida = semanaDeQuery(req.query);
+    const anterior = semanaPrevia(elegida.semana, elegida.anio);
+    const lista = await cuentaDeUsuario(req.usuarioId, hoy);
 
-    // Semana actual (viernes a jueves; ?fecha= es el día local del teléfono) y la anterior
-    const actual = semanaDeQuery(req.query);
-    const anterior = semanaPrevia(actual.semana, actual.anio);
-    const merma = await calcularMerma(usuarioId, req.query.fecha ? new Date(req.query.fecha) : new Date());
-
-    async function calcularSemana({ semana, anio }) {
-      const { inicio, fin } = rangoSemana(semana, anio);
-      const [ingresos, leche, precio] = await Promise.all([
-        Venta.aggregate([
-          { $match: { usuarioId: new ObjectId(usuarioId), fecha: { $gte: inicio, $lte: fin } } },
-          { $group: { _id: null, total: { $sum: '$totalVenta' }, kgVendidos: { $sum: { $cond: [{ $eq: ['$unidad', 'kg'] }, '$cantidad', 0] } } } }
-        ]),
-        Leche.aggregate([
-          { $match: { usuarioId: new ObjectId(usuarioId), fecha: { $gte: inicio, $lte: fin } } },
-          { $group: { _id: null, totalLitros: { $sum: '$litros' } } }
-        ]),
-        precioDeSemana(usuarioId, semana, anio, inicio, fin)
-      ]);
-
-      const ingresosTotal = ingresos[0]?.total || 0;
-      const litrosComprados = leche[0]?.totalLitros || 0;
-      const costoLitro = await costoLitroDeSemana(usuarioId, inicio);
-      const costoLeche = parseFloat((litrosComprados * costoLitro).toFixed(2));
-      const ganancia = parseFloat((ingresosTotal - costoLeche).toFixed(2));
-      // La merma es queso que se dejó de vender: se muestra como pérdida valorada al precio por kg
-      const m = mermaDeSemana(merma, semana, anio);
-      const precioKg = precio?.precioPorKg || 0;
-
-      return {
-        semana, anio,
-        rango: { inicio, fin, texto: textoRango(inicio, fin) },
-        ingresos: ingresosTotal,
-        litrosComprados,
-        costoLitro,
-        costoLeche,
-        ganancia,
-        precioVentaKg: precioKg,
-        mermaKg: m.kg,
-        mermaPct: m.pct,
-        mermaEstimada: m.estimada,
-        valorMerma: m.kg > 0 ? Math.round(m.kg * precioKg) : 0
-      };
-    }
-
-    const semanaActual = await calcularSemana(actual);
-    const semanaAnterior = await calcularSemana(anterior);
+    const semanaActual = cuentaDe(lista, elegida);
+    const semanaAnterior = cuentaDe(lista, anterior);
 
     const variacion = semanaActual.ganancia - semanaAnterior.ganancia;
     const porcentaje = semanaAnterior.ganancia > 0
@@ -176,43 +147,33 @@ router.get('/ganancias', async (req, res) => {
 // GET /api/resumen/semanas?n=8 — serie de las últimas n semanas viernes–jueves (gráficos de Reportes)
 router.get('/semanas', async (req, res) => {
   try {
-    const usuarioId = req.usuarioId;
-    const ObjectId = require('mongoose').Types.ObjectId;
     const n = Math.min(Math.max(Number(req.query.n) || 8, 1), 26);
-    const actual = semanaDeFecha(req.query.fecha ? new Date(req.query.fecha) : new Date());
+    const hoy = req.query.fecha ? new Date(req.query.fecha) : new Date();
+    const actual = semanaDeFecha(hoy);
     const inicioActual = rangoSemana(actual.semana, actual.anio).inicio;
-    const merma = await calcularMerma(usuarioId, req.query.fecha ? new Date(req.query.fecha) : new Date());
+    const lista = await cuentaDeUsuario(req.usuarioId, hoy);
 
+    // Mismas cuentas que Ganancias: ingresos = ventas del queso de cada semana (por lote)
     const semanas = [];
     for (let i = n - 1; i >= 0; i--) {
-      const inicio = new Date(inicioActual.getTime() - i * 7 * 24 * 60 * 60 * 1000);
-      const fin = new Date(inicio.getTime() + 7 * 24 * 60 * 60 * 1000 - 1);
-      const { semana, anio } = semanaDeFecha(inicio);
-      const match = { usuarioId: new ObjectId(usuarioId), fecha: { $gte: inicio, $lte: fin } };
-
-      const [ventas, leche, produccion, precio] = await Promise.all([
-        Venta.aggregate([{ $match: match }, { $group: { _id: null, total: { $sum: '$totalVenta' } } }]),
-        Leche.aggregate([{ $match: match }, { $group: { _id: null, litros: { $sum: '$litros' } } }]),
-        Produccion.aggregate([{ $match: match }, { $group: { _id: null, kg: { $sum: '$kgProducidos' }, litros: { $sum: '$litrosUsados' } } }]),
-        precioDeSemana(usuarioId, semana, anio, inicio, fin)
-      ]);
-      const ingresos = ventas[0]?.total || 0;
-      const litros = leche[0]?.litros || 0;
-      const costoLeche = parseFloat((litros * await costoLitroDeSemana(usuarioId, inicio)).toFixed(2));
-      const kg = produccion[0]?.kg || 0;
-      const litrosUsados = produccion[0]?.litros || 0;
+      const c = cuentaDe(lista, semanaDeFecha(new Date(inicioActual.getTime() - i * 7 * 24 * 60 * 60 * 1000)));
       semanas.push({
-        semana, anio,
-        fechaInicio: inicio,
-        fechaFin: fin,
-        ingresos,
-        litrosLeche: litros,
-        costoLeche,
-        ganancia: parseFloat((ingresos - costoLeche).toFixed(2)),
-        kgProducidos: kg,
+        semana: c.semana, anio: c.anio,
+        fechaInicio: c.rango.inicio,
+        fechaFin: c.rango.fin,
+        completa: c.completa,
+        ingresos: c.ventas,
+        litrosLeche: c.litrosLeche,
+        costoLeche: c.costoLeche,
+        ganancia: c.ganancia,
+        kgProducidos: c.kgProducidos,
+        kgVendidos: c.kgVendidos,
         // Libras de queso por lata (20 L) de leche usada
-        librasPorLata: librasPorLata(kg, litrosUsados),
-        ...(() => { const m = mermaDeSemana(merma, semana, anio); return { mermaKg: m.kg, mermaPct: m.pct, mermaEstimada: m.estimada }; })()
+        librasPorLata: librasPorLata(c.kgProducidos, c.litrosUsados),
+        mermaKg: c.mermaKg,
+        mermaPct: c.mermaPct,
+        revisar: c.revisar,
+        mermaEstimada: false
       });
     }
     res.json({ ok: true, data: semanas });
