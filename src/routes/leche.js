@@ -5,6 +5,7 @@ const { errorHttp, responderError } = require('../utils/inventario');
 const { DIA_MS, iso } = require('../utils/semana');
 const { textoOpcional } = require('../utils/texto');
 const { positivo } = require('../utils/validar');
+const { idLocalDe, yaGuardado, esRepetido } = require('../utils/idLocal');
 const { pagadasAfectadas, exigirConfirmacion, recalcularPagadas } = require('../utils/liquidacion');
 
 /** "yyyy-MM-dd" → medianoche UTC (así se guardan las fechas que manda la app). */
@@ -92,7 +93,12 @@ router.get('/dias', async (req, res) => {
 // POST /api/leche  { fecha, litros, ganaderoId, observaciones, confirmar }
 // Si el ganadero ya tiene pagada la liquidación de esa semana, pide confirmación (409).
 router.post('/', async (req, res) => {
+  let idLocal;
   try {
+    // Reenvío de un registro hecho sin internet que ya se guardó: se devuelve el mismo (no se duplica)
+    idLocal = idLocalDe(req);
+    const previo = await yaGuardado(Leche, req, idLocal);
+    if (previo) return res.json({ ok: true, repetido: true, data: (await conNombre(req.usuarioId, [previo]))[0] });
     const { fecha, ganaderoId, observaciones } = req.body;
     const litros = positivo(req.body.litros, 'litros');
     const ganadero = await ganaderoDe(req.usuarioId, ganaderoId);
@@ -105,11 +111,17 @@ router.post('/', async (req, res) => {
       fecha: dia,
       litros,
       ganaderoId: ganadero._id,
-      observaciones: textoOpcional(observaciones)
+      observaciones: textoOpcional(observaciones),
+      idLocal
     });
     await recalcularPagadas(pagadas);
     res.status(201).json({ ok: true, data: { ...registro.toObject(), nombreGanadero: ganadero.nombre } });
   } catch (e) {
+    // Dos envíos del mismo registro al mismo tiempo: el segundo devuelve el que guardó el primero
+    if (esRepetido(e)) {
+      const previo = await yaGuardado(Leche, req, idLocal);
+      if (previo) return res.json({ ok: true, repetido: true, data: (await conNombre(req.usuarioId, [previo]))[0] });
+    }
     responderError(res, e);
   }
 });

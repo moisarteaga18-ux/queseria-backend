@@ -3,6 +3,7 @@ const { Produccion } = require('../models');
 const { errorHttp, responderError, registrarMovimiento, revertirReferencia, reemplazarMovimiento } = require('../utils/inventario');
 const { textoOpcional } = require('../utils/texto');
 const { positivo } = require('../utils/validar');
+const { idLocalDe, yaGuardado, esRepetido } = require('../utils/idLocal');
 
 router.get('/', async (req, res) => {
   try {
@@ -18,7 +19,12 @@ router.get('/', async (req, res) => {
 // POST /api/produccion  { fecha, litrosUsados, kgProducidos, observaciones, productoId }
 // Con productoId, el queso producido se suma al inventario de ese producto.
 router.post('/', async (req, res) => {
+  let idLocal;
   try {
+    // Reenvío de un registro hecho sin internet que ya se guardó: se devuelve el mismo (no se duplica)
+    idLocal = idLocalDe(req);
+    const previo = await yaGuardado(Produccion, req, idLocal);
+    if (previo) return res.json({ ok: true, repetido: true, data: previo });
     const { fecha, observaciones, productoId } = req.body;
     // D-17: antes solo se comprobaba que no vinieran vacíos y se aceptaban negativos
     const litrosUsados = positivo(req.body.litrosUsados, 'litrosUsados');
@@ -27,7 +33,8 @@ router.post('/', async (req, res) => {
       usuarioId: req.usuarioId,
       fecha: fecha || new Date(),
       litrosUsados, kgProducidos, observaciones,
-      productoId: productoId || undefined
+      productoId: productoId || undefined,
+      idLocal
     });
     if (productoId) {
       try {
@@ -42,6 +49,10 @@ router.post('/', async (req, res) => {
     }
     res.status(201).json({ ok: true, data: registro });
   } catch (e) {
+    if (esRepetido(e)) {
+      const previo = await yaGuardado(Produccion, req, idLocal);
+      if (previo) return res.json({ ok: true, repetido: true, data: previo });
+    }
     responderError(res, e);
   }
 });

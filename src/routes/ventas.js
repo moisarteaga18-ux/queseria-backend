@@ -3,6 +3,7 @@ const { Venta, Precio, Cliente } = require('../models');
 const { errorHttp, responderError, registrarMovimiento, revertirReferencia, reemplazarMovimiento } = require('../utils/inventario');
 const { textoOpcional } = require('../utils/texto');
 const { positivo } = require('../utils/validar');
+const { idLocalDe, yaGuardado, esRepetido } = require('../utils/idLocal');
 
 const { aKg } = require('../utils/unidades');
 
@@ -27,7 +28,12 @@ router.get('/', async (req, res) => {
 // { fecha, tipoVenta: mayorista|libras, cliente, clienteId, productoId, cantidad, unidad: kg|libras, precioUnitario }
 // Con productoId, la cantidad se descuenta del inventario (falla si no hay stock suficiente).
 router.post('/', async (req, res) => {
+  let idLocal;
   try {
+    // Reenvío de una venta hecha sin internet que ya se guardó: se devuelve la misma (no se duplica)
+    idLocal = idLocalDe(req);
+    const previa = await yaGuardado(Venta, req, idLocal);
+    if (previa) return res.json({ ok: true, repetido: true, data: previa });
     const { fecha, tipoVenta, clienteId, productoId, unidad } = req.body;
     if (!tipoVenta) throw errorHttp(400, 'Elige el tipo de venta (mayorista o minorista)');
     const cantidad = positivo(req.body.cantidad, 'cantidad');
@@ -55,7 +61,8 @@ router.post('/', async (req, res) => {
       tipoVenta, cliente, cantidad, unidad, precioUnitario, totalVenta,
       clienteId: clienteId || undefined,
       productoId: productoId || undefined,
-      precioRef: precioActivo?._id
+      precioRef: precioActivo?._id,
+      idLocal
     });
 
     if (productoId) {
@@ -74,6 +81,10 @@ router.post('/', async (req, res) => {
     }
     res.status(201).json({ ok: true, data: venta });
   } catch (e) {
+    if (esRepetido(e)) {
+      const previa = await yaGuardado(Venta, req, idLocal);
+      if (previa) return res.json({ ok: true, repetido: true, data: previa });
+    }
     responderError(res, e);
   }
 });

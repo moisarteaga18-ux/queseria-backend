@@ -31,8 +31,13 @@ const lecheSchema = new mongoose.Schema({
   litros: decimal({ required: true, positivo: true }),
   // El nombre se toma siempre del ganadero (el campo viejo `proveedor` se migró y eliminó)
   ganaderoId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ganadero', required: true, index: true },
-  observaciones: { type: String }
+  observaciones: { type: String },
+  // Registro hecho sin internet: lo pone el teléfono para que un reenvío no lo duplique (utils/idLocal.js)
+  idLocal: { type: String }
 }, opciones);
+
+// Un registro del teléfono se guarda una sola vez (solo los que traen idLocal)
+lecheSchema.index({ usuarioId: 1, idLocal: 1 }, { unique: true, partialFilterExpression: { idLocal: { $type: 'string' } } });
 
 // ── Producción de queso ──────────────────────────────────────────────────────
 const produccionSchema = new mongoose.Schema({
@@ -44,8 +49,11 @@ const produccionSchema = new mongoose.Schema({
   rendimiento: decimal(),
   // Producto al que se sumó el queso en el inventario (opcional)
   productoId: { type: mongoose.Schema.Types.ObjectId, ref: 'Producto' },
-  observaciones: { type: String }
+  observaciones: { type: String },
+  idLocal: { type: String }
 }, opciones);
+
+produccionSchema.index({ usuarioId: 1, idLocal: 1 }, { unique: true, partialFilterExpression: { idLocal: { $type: 'string' } } });
 
 // Rendimiento = libras de queso por lata de leche = (kg × 2) ÷ (litros ÷ 20)
 produccionSchema.pre('save', function(next) {
@@ -80,8 +88,11 @@ const ventaSchema = new mongoose.Schema({
   unidad: { type: String, enum: ['kg', 'libras'], required: true },
   precioUnitario: decimal({ required: true, positivo: true }),
   totalVenta: decimal({ required: true }),
-  precioRef: { type: mongoose.Schema.Types.ObjectId, ref: 'Precio' }
+  precioRef: { type: mongoose.Schema.Types.ObjectId, ref: 'Precio' },
+  idLocal: { type: String }
 }, opciones);
+
+ventaSchema.index({ usuarioId: 1, idLocal: 1 }, { unique: true, partialFilterExpression: { idLocal: { $type: 'string' } } });
 
 // ── Producto (tipo de queso). El stock se guarda en kilos ──────────────────────
 const productoSchema = new mongoose.Schema({
