@@ -241,7 +241,30 @@ const cierreSemanaSchema = new mongoose.Schema({
 }, opciones);
 cierreSemanaSchema.index({ usuarioId: 1, anio: 1, semana: 1 }, { unique: true });
 
+// ── Papelera: copia de lo que se borra, para recuperarlo durante 30 días ─────────
+// Colección aparte: borrar o restaurar no cambia los demás registros. MongoDB elimina sola cada
+// entrada cuando pasa su fecha `expiraEn` (índice TTL de esta colección).
+const DIAS_PAPELERA = 30;
+const papeleraSchema = new mongoose.Schema({
+  usuarioId: { type: mongoose.Schema.Types.ObjectId, ref: 'Usuario', required: true, index: true },
+  tipo: { type: String, enum: ['leche', 'produccion', 'venta', 'descuento', 'liquidacion'], required: true },
+  // El registro tal como estaba (con su _id), para volver a crearlo igual
+  documento: { type: mongoose.Schema.Types.Mixed, required: true },
+  // Lo que se muestra en la lista: fecha del registro, nombre, cantidad y valor
+  resumen: {
+    fecha: Date,
+    nombre: String,
+    cantidad: String,
+    valor: Number
+  },
+  borradoEn: { type: Date, default: Date.now },
+  expiraEn: { type: Date, default: () => new Date(Date.now() + DIAS_PAPELERA * 24 * 60 * 60 * 1000) }
+}, { ...opciones, minimize: false });
+papeleraSchema.index({ expiraEn: 1 }, { expireAfterSeconds: 0 });
+
 module.exports = {
+  Papelera: mongoose.model('Papelera', papeleraSchema, 'papelera'),
+  DIAS_PAPELERA,
   Leche: mongoose.model('Leche', lecheSchema),
   Produccion: mongoose.model('Produccion', produccionSchema),
   Precio: mongoose.model('Precio', precioSchema),

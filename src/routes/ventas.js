@@ -1,4 +1,5 @@
 const router = require('express').Router();
+const { borrarConPapelera } = require('../utils/papelera');
 const { Venta, Precio, Cliente } = require('../models');
 const { errorHttp, responderError, registrarMovimiento, revertirReferencia, reemplazarMovimiento } = require('../utils/inventario');
 const { textoOpcional } = require('../utils/texto');
@@ -131,9 +132,12 @@ router.put('/:id', async (req, res) => {
 // DELETE /api/ventas/:id  (si descontó inventario, el queso vuelve al stock)
 router.delete('/:id', async (req, res) => {
   try {
-    const venta = await Venta.findOneAndDelete({ _id: req.params.id, usuarioId: req.usuarioId });
-    if (venta) await revertirReferencia(req.usuarioId, venta._id);
-    res.json({ ok: true });
+    const venta = await Venta.findOne({ _id: req.params.id, usuarioId: req.usuarioId });
+    if (!venta) return res.json({ ok: true });
+    // Queda una copia en la papelera (30 días) para "Deshacer" o restaurarla
+    const papeleraId = await borrarConPapelera(req.usuarioId, 'venta', venta);
+    await revertirReferencia(req.usuarioId, venta._id);
+    res.json({ ok: true, papeleraId, data: { papeleraId } });
   } catch (e) {
     responderError(res, e);
   }

@@ -6,6 +6,7 @@ const { rangoSemana, semanaDeFecha, semanaDeQuery, semanaAnterior, textoRango } 
 const { textoOpcional } = require('../utils/texto');
 const { redondear, precioDe, calcular, refrescar } = require('../utils/liquidacion');
 const { fijarPrecioLitro } = require('../utils/precios');
+const { borrarConPapelera } = require('../utils/papelera');
 
 const FORMAS_PAGO = ['efectivo', 'nequi', 'transferencia'];
 
@@ -363,8 +364,9 @@ router.delete('/:id', async (req, res) => {
       usuarioId: req.usuarioId, ganaderoId: liq.ganaderoId, nombreGanadero: liq.nombreGanadero,
       numero: liq.numero, semana: liq.semana, anio: liq.anio, total: liq.total
     });
-    await liq.deleteOne();
-    res.json({ ok: true });
+    // Queda una copia en la papelera (30 días): se puede restaurar con su mismo número
+    const papeleraId = await borrarConPapelera(req.usuarioId, 'liquidacion', liq);
+    res.json({ ok: true, papeleraId, data: { papeleraId } });
   } catch (e) {
     responderError(res, e);
   }

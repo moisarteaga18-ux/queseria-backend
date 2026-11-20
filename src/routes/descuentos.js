@@ -1,17 +1,11 @@
 const router = require('express').Router();
-const { Descuento, Ganadero, Liquidacion } = require('../models');
+const { Descuento, Ganadero } = require('../models');
 const { errorHttp, responderError } = require('../utils/inventario');
-const { rangoSemana, semanaDeFecha } = require('../utils/semana');
+const { rangoSemana } = require('../utils/semana');
 const { textoOpcional } = require('../utils/texto');
+const { borrarConPapelera, validarSemanaAbierta } = require('../utils/papelera');
 
 const TIPOS = ['adelanto', 'prestamo', 'leche_rechazada', 'otro'];
-
-/** Los descuentos de una semana ya pagada no se pueden cambiar (el comprobante ya se entregó). */
-async function validarSemanaAbierta(usuarioId, ganaderoId, fecha) {
-  const { semana, anio } = semanaDeFecha(fecha);
-  const pagada = await Liquidacion.findOne({ usuarioId, ganaderoId, semana, anio, estado: 'pagado' });
-  if (pagada) throw errorHttp(400, `La liquidación N° ${pagada.numero} de esa semana ya está pagada`);
-}
 
 // GET /api/descuentos?ganaderoId=&semana=&anio=
 router.get('/', async (req, res) => {
@@ -66,8 +60,9 @@ router.delete('/:id', async (req, res) => {
     const descuento = await Descuento.findOne({ _id: req.params.id, usuarioId: req.usuarioId });
     if (!descuento) return res.json({ ok: true });
     await validarSemanaAbierta(req.usuarioId, descuento.ganaderoId, descuento.fecha);
-    await descuento.deleteOne();
-    res.json({ ok: true });
+    // Queda una copia en la papelera (30 días) para "Deshacer" o restaurarlo
+    const papeleraId = await borrarConPapelera(req.usuarioId, 'descuento', descuento);
+    res.json({ ok: true, papeleraId, data: { papeleraId } });
   } catch (e) {
     responderError(res, e);
   }

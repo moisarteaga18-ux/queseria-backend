@@ -6,6 +6,7 @@ const { DIA_MS, iso } = require('../utils/semana');
 const { textoOpcional } = require('../utils/texto');
 const { positivo } = require('../utils/validar');
 const { idLocalDe, yaGuardado, esRepetido } = require('../utils/idLocal');
+const { borrarConPapelera } = require('../utils/papelera');
 const { pagadasAfectadas, exigirConfirmacion, recalcularPagadas } = require('../utils/liquidacion');
 
 /** "yyyy-MM-dd" → medianoche UTC (así se guardan las fechas que manda la app). */
@@ -165,9 +166,10 @@ router.delete('/:id', async (req, res) => {
       ? await pagadasAfectadas(req.usuarioId, [{ ganaderoId: registro.ganaderoId, fecha: registro.fecha }])
       : [];
     exigirConfirmacion(req, pagadas);
-    await registro.deleteOne();
+    // Queda una copia en la papelera (30 días) para "Deshacer" o restaurarlo
+    const papeleraId = await borrarConPapelera(req.usuarioId, 'leche', registro);
     await recalcularPagadas(pagadas);
-    res.json({ ok: true });
+    res.json({ ok: true, papeleraId, data: { papeleraId } });
   } catch (e) {
     responderError(res, e);
   }

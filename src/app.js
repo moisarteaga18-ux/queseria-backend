@@ -35,5 +35,6 @@ app.use('/api/ganaderos', verificarToken, require('./routes/ganaderos'));
 app.use('/api/liquidaciones', verificarToken, require('./routes/liquidaciones'));
 app.use('/api/descuentos', verificarToken, require('./routes/descuentos'));
 app.use('/api/merma', verificarToken, require('./routes/merma'));
+app.use('/api/papelera', verificarToken, require('./routes/papelera'));
 
 module.exports = app;

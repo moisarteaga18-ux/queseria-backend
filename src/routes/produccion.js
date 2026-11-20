@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const { Produccion } = require('../models');
 const { errorHttp, responderError, registrarMovimiento, revertirReferencia, reemplazarMovimiento } = require('../utils/inventario');
+const { borrarConPapelera } = require('../utils/papelera');
 const { textoOpcional } = require('../utils/texto');
 const { positivo } = require('../utils/validar');
 const { idLocalDe, yaGuardado, esRepetido } = require('../utils/idLocal');
@@ -86,9 +87,12 @@ router.put('/:id', async (req, res) => {
 // DELETE /api/produccion/:id  (si sumó al inventario, se descuenta)
 router.delete('/:id', async (req, res) => {
   try {
-    const registro = await Produccion.findOneAndDelete({ _id: req.params.id, usuarioId: req.usuarioId });
-    if (registro) await revertirReferencia(req.usuarioId, registro._id);
-    res.json({ ok: true });
+    const registro = await Produccion.findOne({ _id: req.params.id, usuarioId: req.usuarioId });
+    if (!registro) return res.json({ ok: true });
+    // Queda una copia en la papelera (30 días) para "Deshacer" o restaurarlo
+    const papeleraId = await borrarConPapelera(req.usuarioId, 'produccion', registro);
+    await revertirReferencia(req.usuarioId, registro._id);
+    res.json({ ok: true, papeleraId, data: { papeleraId } });
   } catch (e) {
     responderError(res, e);
   }
