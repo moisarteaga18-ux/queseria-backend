@@ -5,6 +5,15 @@ const { errorHttp, responderError, registrarMovimiento, revertirReferencia, reem
 const { textoOpcional } = require('../utils/texto');
 const { positivo } = require('../utils/validar');
 const { idLocalDe, yaGuardado, esRepetido } = require('../utils/idLocal');
+const { conEstado, abonadoPorVenta, cuentasPorCobrar, pesos } = require('../utils/cobros');
+const { Abono } = require('../models');
+
+/** `fiada` del cuerpo: true, false o undefined (no vino). Otro valor → 400. */
+function leerFiada(b) {
+  if (b.fiada === undefined || b.fiada === null) return undefined;
+  if (typeof b.fiada !== 'boolean') throw errorHttp(400, 'Indica si la venta está pagada o pendiente por pagar');
+  return b.fiada;
+}
 
 const { aKg } = require('../utils/unidades');
 
@@ -19,7 +28,19 @@ router.get('/', async (req, res) => {
     }
     if (clienteId) filter.clienteId = clienteId;
     const ventas = await Venta.find(filter).sort({ fecha: -1, createdAt: -1 }).limit(Number(limit));
-    res.json({ ok: true, data: ventas });
+    // Cada venta con su estado de cobro: abonado, saldo (lo que falta) y pagada
+    res.json({ ok: true, data: await conEstado(req.usuarioId, ventas) });
+  } catch (e) {
+    responderError(res, e);
+  }
+});
+
+// GET /api/ventas/por-cobrar?fecha=yyyy-MM-dd — cuentas por cobrar: ventas fiadas con saldo (la más antigua
+// primero, con sus abonos y los días que llevan), lo que debe cada cliente y el total.
+router.get('/por-cobrar', async (req, res) => {
+  try {
+    const hoy = req.query.fecha ? new Date(req.query.fecha) : new Date();
+    res.json({ ok: true, data: await cuentasPorCobrar(req.usuarioId, Number.isNaN(hoy.getTime()) ? new Date() : hoy) });
   } catch (e) {
     responderError(res, e);
   }
@@ -34,8 +55,10 @@ router.post('/', async (req, res) => {
     // Reenvío de una venta hecha sin internet que ya se guardó: se devuelve la misma (no se duplica)
     idLocal = idLocalDe(req);
     const previa = await yaGuardado(Venta, req, idLocal);
-    if (previa) return res.json({ ok: true, repetido: true, data: previa });
+    if (previa) return res.json({ ok: true, repetido: true, data: (await conEstado(req.usuarioId, [previa]))[0] });
     const { fecha, tipoVenta, clienteId, productoId, unidad } = req.body;
+    const fiada = leerFiada(req.body) === true;
+    if (fiada && !clienteId) throw errorHttp(400, 'Para una venta pendiente por pagar, elige el cliente');
     if (!tipoVenta) throw errorHttp(400, 'Elige el tipo de venta (mayorista o minorista)');
     const cantidad = positivo(req.body.cantidad, 'cantidad');
     const precioUnitario = positivo(req.body.precioUnitario, 'precioUnitario');
@@ -63,7 +86,9 @@ router.post('/', async (req, res) => {
       clienteId: clienteId || undefined,
       productoId: productoId || undefined,
       precioRef: precioActivo?._id,
-      idLocal
+      idLocal,
+      // Solo se guarda si es fiada (las pagadas quedan como siempre, sin el campo)
+      fiada: fiada || undefined
     });
 
     if (productoId) {
@@ -80,11 +105,11 @@ router.post('/', async (req, res) => {
         throw e;
       }
     }
-    res.status(201).json({ ok: true, data: venta });
+    res.status(201).json({ ok: true, data: (await conEstado(req.usuarioId, [venta]))[0] });
   } catch (e) {
     if (esRepetido(e)) {
       const previa = await yaGuardado(Venta, req, idLocal);
-      if (previa) return res.json({ ok: true, repetido: true, data: previa });
+      if (previa) return res.json({ ok: true, repetido: true, data: (await conEstado(req.usuarioId, [previa]))[0] });
     }
     responderError(res, e);
   }
@@ -115,6 +140,18 @@ router.put('/:id', async (req, res) => {
     }
     if (b.productoId !== undefined) venta.productoId = b.productoId || undefined;
     venta.totalVenta = parseFloat((venta.cantidad * venta.precioUnitario).toFixed(2));
+
+    // Pagada / pendiente por pagar, sin romper los abonos que ya tiene
+    const fiada = leerFiada(b);
+    const abonado = (await abonadoPorVenta(req.usuarioId, [venta._id])).get(String(venta._id)) || 0;
+    if (fiada === false && abonado > 0) {
+      throw errorHttp(400, `Esta venta ya tiene abonos por ${pesos(abonado)}: para dejarla pagada, registra un abono por lo que falta`);
+    }
+    if (fiada !== undefined) venta.fiada = fiada ? true : undefined;
+    if (venta.fiada && !venta.clienteId) throw errorHttp(400, 'Para una venta pendiente por pagar, elige el cliente');
+    if (venta.fiada && venta.totalVenta < abonado - 0.005) {
+      throw errorHttp(400, `Ya te abonaron ${pesos(abonado)}: el total de la venta no puede quedar en menos`);
+    }
     await venta.validate();
 
     await reemplazarMovimiento(req.usuarioId, venta._id, venta.productoId && {
@@ -123,7 +160,7 @@ router.put('/:id', async (req, res) => {
       motivo: 'Venta' + (venta.cliente ? ` a ${venta.cliente}` : ''), fecha: venta.fecha
     });
     await venta.save();
-    res.json({ ok: true, data: venta });
+    res.json({ ok: true, data: (await conEstado(req.usuarioId, [venta]))[0] });
   } catch (e) {
     responderError(res, e);
   }
@@ -134,8 +171,10 @@ router.delete('/:id', async (req, res) => {
   try {
     const venta = await Venta.findOne({ _id: req.params.id, usuarioId: req.usuarioId });
     if (!venta) return res.json({ ok: true });
-    // Queda una copia en la papelera (30 días) para "Deshacer" o restaurarla
-    const papeleraId = await borrarConPapelera(req.usuarioId, 'venta', venta);
+    // Queda una copia en la papelera (30 días) para "Deshacer" o restaurarla; sus abonos van con ella
+    const abonos = await Abono.find({ usuarioId: req.usuarioId, ventaId: venta._id }).lean();
+    const papeleraId = await borrarConPapelera(req.usuarioId, 'venta', venta, abonos.length ? { abonos } : undefined);
+    if (abonos.length) await Abono.deleteMany({ usuarioId: req.usuarioId, ventaId: venta._id });
     await revertirReferencia(req.usuarioId, venta._id);
     res.json({ ok: true, papeleraId, data: { papeleraId } });
   } catch (e) {

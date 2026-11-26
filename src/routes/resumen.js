@@ -2,6 +2,7 @@ const router = require('express').Router();
 const { Leche, Produccion, Venta, Precio, PrecioLeche } = require('../models');
 const { semanaDeFecha, semanaDeQuery, semanaAnterior: semanaPrevia, rangoSemana, textoRango } = require('../utils/semana');
 const { cuentaDeUsuario } = require('../utils/merma');
+const { porCobrarPorSemana, cuentasPorCobrar } = require('../utils/cobros');
 const { LIBRAS_POR_KG, librasPorLata } = require('../utils/unidades');
 
 /**
@@ -109,7 +110,9 @@ router.get('/hoy', async (req, res) => {
         numeroVentasHoy: ventas.reduce((sum, v) => sum + v.count, 0),
         costoLecheHoy,
         gananciaEstimadaHoy: parseFloat((totalVentasHoy - costoLecheHoy).toFixed(2)),
-        precioActivo: precioActivo || null
+        precioActivo: precioActivo || null,
+        // Lo que te deben hoy (todas las ventas fiadas con saldo)
+        porCobrarTotal: (await cuentasPorCobrar(usuarioId)).total
       }
     });
   } catch (e) {
@@ -125,10 +128,11 @@ router.get('/ganancias', async (req, res) => {
     const hoy = req.query.fecha ? new Date(req.query.fecha) : new Date();
     const elegida = semanaDeQuery(req.query);
     const anterior = semanaPrevia(elegida.semana, elegida.anio);
-    const lista = await cuentaDeUsuario(req.usuarioId, hoy);
+    const [lista, porCobrar] = await Promise.all([cuentaDeUsuario(req.usuarioId, hoy), porCobrarPorSemana(req.usuarioId)]);
 
-    const semanaActual = cuentaDe(lista, elegida);
-    const semanaAnterior = cuentaDe(lista, anterior);
+    // Lo que falta por cobrar de las ventas de la semana (ventas fiadas): aparte, no cambia ventas ni ganancia
+    const semanaActual = { ...cuentaDe(lista, elegida), porCobrar: porCobrar.get(`${elegida.anio}-${elegida.semana}`) || 0 };
+    const semanaAnterior = { ...cuentaDe(lista, anterior), porCobrar: porCobrar.get(`${anterior.anio}-${anterior.semana}`) || 0 };
 
     const variacion = semanaActual.ganancia - semanaAnterior.ganancia;
     const porcentaje = semanaAnterior.ganancia > 0
@@ -156,7 +160,7 @@ router.get('/semanas', async (req, res) => {
     if (hasta && Number.isNaN(hasta.getTime())) return res.status(400).json({ ok: false, error: 'Fecha "hasta" inválida' });
     const actual = hasta && hasta < inicioHoy ? semanaDeFecha(hasta) : deHoy;
     const inicioActual = rangoSemana(actual.semana, actual.anio).inicio;
-    const lista = await cuentaDeUsuario(req.usuarioId, hoy);
+    const [lista, porCobrar] = await Promise.all([cuentaDeUsuario(req.usuarioId, hoy), porCobrarPorSemana(req.usuarioId)]);
 
     // Mismas cuentas que Ganancias: ingresos = ventas del queso de cada semana (por lote)
     const semanas = [];
@@ -178,6 +182,8 @@ router.get('/semanas', async (req, res) => {
         mermaKg: c.mermaKg,
         mermaPct: c.mermaPct,
         valorMerma: c.valorMerma,
+        // Lo que falta por cobrar (hoy) de las ventas fiadas de esa semana
+        porCobrar: porCobrar.get(`${c.anio}-${c.semana}`) || 0,
         revisar: c.revisar,
         mermaEstimada: false
       });

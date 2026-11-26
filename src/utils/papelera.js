@@ -1,13 +1,16 @@
 // Papelera: antes de borrar un registro se guarda una copia en la colección `papelera` (30 días).
 // Restaurar lo vuelve a crear con el MISMO _id y rehace lo que su borrado deshizo (inventario,
 // liquidaciones pagadas). Ningún otro registro existente se modifica para guardar en la papelera.
-const { Leche, Produccion, Venta, Descuento, Liquidacion, LiquidacionAnulada, Ganadero, Papelera } = require('../models');
+const { Leche, Produccion, Venta, Descuento, Liquidacion, LiquidacionAnulada, Ganadero, Papelera, Abono } = require('../models');
 const { errorHttp, registrarMovimiento } = require('./inventario');
 const { pagadasAfectadas, exigirConfirmacion, recalcularPagadas, refrescar } = require('./liquidacion');
 const { semanaDeFecha } = require('./semana');
 const { aKg } = require('./unidades');
 
-const MODELOS = { leche: Leche, produccion: Produccion, venta: Venta, descuento: Descuento, liquidacion: Liquidacion };
+const MODELOS = { leche: Leche, produccion: Produccion, venta: Venta, descuento: Descuento, liquidacion: Liquidacion, abono: Abono };
+
+const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+const diaMes = (f) => { const d = new Date(f); return `${d.getUTCDate()} ${MESES[d.getUTCMonth()]}`; };
 
 const TIPOS_DESCUENTO = { adelanto: 'Adelanto', prestamo: 'Préstamo', leche_rechazada: 'Leche rechazada', otro: 'Otro descuento' };
 
@@ -40,6 +43,13 @@ async function resumenDe(tipo, d) {
         cantidad: TIPOS_DESCUENTO[d.tipo] + (d.tipo === 'leche_rechazada' ? ` · ${numero(d.litros, 1)} L` : ''),
         valor: d.tipo === 'leche_rechazada' ? undefined : d.valor
       };
+    case 'abono': {
+      const v = await Venta.findOne({ _id: d.ventaId, usuarioId: d.usuarioId }).lean();
+      return {
+        fecha: d.fecha, nombre: v?.cliente || 'Cliente',
+        cantidad: v ? `Abono a la venta del ${diaMes(v.fecha)}` : 'Abono', valor: d.valor
+      };
+    }
     case 'liquidacion':
       return {
         fecha: d.fechaInicio, nombre: d.nombreGanadero,
@@ -51,17 +61,17 @@ async function resumenDe(tipo, d) {
 }
 
 /** Guarda una copia del registro [doc] (documento de Mongoose) en la papelera y devuelve la entrada. */
-async function guardarEnPapelera(usuarioId, tipo, doc) {
+async function guardarEnPapelera(usuarioId, tipo, doc, extra) {
   const documento = doc.toObject({ getters: true, virtuals: false });
-  return Papelera.create({ usuarioId, tipo, documento, resumen: await resumenDe(tipo, documento) });
+  return Papelera.create({ usuarioId, tipo, documento, extra, resumen: await resumenDe(tipo, documento) });
 }
 
 /**
  * Borra [doc] dejando antes su copia en la papelera. Si el borrado falla, la copia se quita.
  * Devuelve el _id de la entrada de la papelera (la app lo usa para "Deshacer").
  */
-async function borrarConPapelera(usuarioId, tipo, doc) {
-  const entrada = await guardarEnPapelera(usuarioId, tipo, doc);
+async function borrarConPapelera(usuarioId, tipo, doc, extra) {
+  const entrada = await guardarEnPapelera(usuarioId, tipo, doc, extra);
   try {
     await doc.deleteOne();
   } catch (e) {
@@ -100,6 +110,16 @@ async function restaurar(req, entrada) {
     exigirConfirmacion(req, pagadas);
   }
   if (tipo === 'descuento') await validarSemanaAbierta(usuarioId, d.ganaderoId, d.fecha);
+  if (tipo === 'abono') {
+    // La venta debe seguir existiendo (fiada) y el abono no puede pasar de lo que falta
+    const { ventaFiada, pesos } = require('./cobros');
+    const { saldo } = await ventaFiada(usuarioId, d.ventaId).catch(() => {
+      throw errorHttp(409, 'La venta de ese abono ya no existe o está marcada como pagada');
+    });
+    if (Number(d.valor) > saldo + 0.005) {
+      throw errorHttp(409, saldo > 0 ? `A esa venta solo le falta ${pesos(saldo)}: el abono no cabe` : 'Esa venta ya está pagada');
+    }
+  }
   if (tipo === 'liquidacion') {
     const otra = await Liquidacion.findOne({ usuarioId, ganaderoId: d.ganaderoId, semana: d.semana, anio: d.anio });
     if (otra) {
@@ -135,6 +155,10 @@ async function restaurar(req, entrada) {
     throw e;
   }
 
+  if (tipo === 'venta' && entrada.extra?.abonos?.length) {
+    // Los abonos que se borraron con la venta vuelven con ella (mismo _id y fechas)
+    await Abono.insertMany(entrada.extra.abonos.map(a => ({ ...a, valor: Number(a.valor) })), { timestamps: false });
+  }
   if (tipo === 'leche') await recalcularPagadas(pagadas);
   if (tipo === 'liquidacion') {
     // Ya no está anulada; si estaba pendiente se recalcula con la leche y los descuentos de hoy

@@ -25,6 +25,7 @@ app.use('/api/auth', require('./routes/auth'));
 app.use('/api/leche', verificarToken, require('./routes/leche'));
 app.use('/api/produccion', verificarToken, require('./routes/produccion'));
 app.use('/api/ventas', verificarToken, require('./routes/ventas'));
+app.use('/api/abonos', verificarToken, require('./routes/abonos'));
 app.use('/api/precios', verificarToken, require('./routes/precios'));
 app.use('/api/resumen', verificarToken, require('./routes/resumen'));
 app.use('/api/rendimiento', verificarToken, require('./routes/rendimiento'));

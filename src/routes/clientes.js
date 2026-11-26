@@ -2,6 +2,7 @@ const router = require('express').Router();
 const { Cliente, Venta } = require('../models');
 const { errorHttp, responderError } = require('../utils/inventario');
 const { nombreIgual, textoOpcional } = require('../utils/texto');
+const { cuentasPorCobrar, debeCliente, conEstado } = require('../utils/cobros');
 
 function leerDatos(body) {
   const nombre = textoOpcional(body.nombre);
@@ -25,7 +26,10 @@ async function validarNombreUnico(usuarioId, nombre, excluirId) {
 router.get('/', async (req, res) => {
   try {
     const clientes = await Cliente.find({ usuarioId: req.usuarioId }).collation({ locale: 'es' }).sort({ nombre: 1 });
-    res.json({ ok: true, data: clientes });
+    // Cuánto debe cada uno (ventas fiadas con saldo)
+    const { clientes: deudas } = await cuentasPorCobrar(req.usuarioId);
+    const debe = new Map(deudas.filter(d => d.clienteId).map(d => [String(d.clienteId), d.debe]));
+    res.json({ ok: true, data: clientes.map(c => ({ ...c.toJSON(), debe: debe.get(String(c._id)) || 0 })) });
   } catch (e) {
     responderError(res, e);
   }
@@ -36,7 +40,7 @@ router.get('/:id', async (req, res) => {
   try {
     const cliente = await Cliente.findOne({ _id: req.params.id, usuarioId: req.usuarioId });
     if (!cliente) throw errorHttp(404, 'Cliente no encontrado');
-    res.json({ ok: true, data: cliente });
+    res.json({ ok: true, data: { ...cliente.toJSON(), debe: await debeCliente(req.usuarioId, cliente._id) } });
   } catch (e) {
     responderError(res, e);
   }
@@ -54,7 +58,7 @@ router.get('/:id/ventas', async (req, res) => {
         { clienteId: null, cliente: nombreIgual(cliente.nombre) }
       ]
     }).sort({ fecha: -1 }).limit(500);
-    res.json({ ok: true, data: ventas });
+    res.json({ ok: true, data: await conEstado(req.usuarioId, ventas) });
   } catch (e) {
     responderError(res, e);
   }

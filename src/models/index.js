@@ -89,10 +89,22 @@ const ventaSchema = new mongoose.Schema({
   precioUnitario: decimal({ required: true, positivo: true }),
   totalVenta: decimal({ required: true }),
   precioRef: { type: mongoose.Schema.Types.ObjectId, ref: 'Precio' },
-  idLocal: { type: String }
+  idLocal: { type: String },
+  // true = venta fiada (el cliente paga después, con abonos). Sin el campo (todas las ventas antiguas) = pagada.
+  // Pagada o pendiente se calcula siempre: lo que falta = total − abonos (utils/cobros.js).
+  fiada: { type: Boolean }
 }, opciones);
 
 ventaSchema.index({ usuarioId: 1, idLocal: 1 }, { unique: true, partialFilterExpression: { idLocal: { $type: 'string' } } });
+
+// ── Abono (pago parcial o total) a una venta fiada. Colección nueva `abonos` ───
+const abonoSchema = new mongoose.Schema({
+  usuarioId: { type: mongoose.Schema.Types.ObjectId, ref: 'Usuario', required: true, index: true },
+  ventaId: { type: mongoose.Schema.Types.ObjectId, ref: 'Venta', required: true, index: true },
+  fecha: { type: Date, required: true },
+  valor: decimal({ required: true, positivo: true }),
+  nota: { type: String }
+}, opciones);
 
 // ── Producto (tipo de queso). El stock se guarda en kilos ──────────────────────
 const productoSchema = new mongoose.Schema({
@@ -247,7 +259,9 @@ cierreSemanaSchema.index({ usuarioId: 1, anio: 1, semana: 1 }, { unique: true })
 const DIAS_PAPELERA = 30;
 const papeleraSchema = new mongoose.Schema({
   usuarioId: { type: mongoose.Schema.Types.ObjectId, ref: 'Usuario', required: true, index: true },
-  tipo: { type: String, enum: ['leche', 'produccion', 'venta', 'descuento', 'liquidacion'], required: true },
+  tipo: { type: String, enum: ['leche', 'produccion', 'venta', 'descuento', 'liquidacion', 'abono'], required: true },
+  // Registros que se borraron junto con este (los abonos de una venta) y vuelven con él
+  extra: { type: mongoose.Schema.Types.Mixed },
   // El registro tal como estaba (con su _id), para volver a crearlo igual
   documento: { type: mongoose.Schema.Types.Mixed, required: true },
   // Lo que se muestra en la lista: fecha del registro, nombre, cantidad y valor
@@ -269,6 +283,7 @@ module.exports = {
   Produccion: mongoose.model('Produccion', produccionSchema),
   Precio: mongoose.model('Precio', precioSchema),
   Venta: mongoose.model('Venta', ventaSchema),
+  Abono: mongoose.model('Abono', abonoSchema, 'abonos'),
   Producto: mongoose.model('Producto', productoSchema),
   Movimiento: mongoose.model('Movimiento', movimientoSchema),
   Cliente: mongoose.model('Cliente', clienteSchema),
