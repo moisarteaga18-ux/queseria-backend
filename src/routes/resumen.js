@@ -144,12 +144,17 @@ router.get('/ganancias', async (req, res) => {
   }
 });
 
-// GET /api/resumen/semanas?n=8 — serie de las últimas n semanas viernes–jueves (gráficos de Reportes)
+// GET /api/resumen/semanas?n=8[&hasta=yyyy-MM-dd] — serie de n semanas viernes–jueves (tablas y gráficos de
+// Reportes) que termina en la semana de `hasta` (sin `hasta`, o si es futura: la semana de hoy). `fecha` = hoy.
 router.get('/semanas', async (req, res) => {
   try {
     const n = Math.min(Math.max(Number(req.query.n) || 8, 1), 26);
     const hoy = req.query.fecha ? new Date(req.query.fecha) : new Date();
-    const actual = semanaDeFecha(hoy);
+    const deHoy = semanaDeFecha(hoy);
+    const inicioHoy = rangoSemana(deHoy.semana, deHoy.anio).inicio;
+    const hasta = req.query.hasta ? new Date(req.query.hasta) : null;
+    if (hasta && Number.isNaN(hasta.getTime())) return res.status(400).json({ ok: false, error: 'Fecha "hasta" inválida' });
+    const actual = hasta && hasta < inicioHoy ? semanaDeFecha(hasta) : deHoy;
     const inicioActual = rangoSemana(actual.semana, actual.anio).inicio;
     const lista = await cuentaDeUsuario(req.usuarioId, hoy);
 
@@ -172,6 +177,7 @@ router.get('/semanas', async (req, res) => {
         librasPorLata: librasPorLata(c.kgProducidos, c.litrosUsados),
         mermaKg: c.mermaKg,
         mermaPct: c.mermaPct,
+        valorMerma: c.valorMerma,
         revisar: c.revisar,
         mermaEstimada: false
       });

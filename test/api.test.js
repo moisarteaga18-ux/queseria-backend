@@ -127,6 +127,22 @@ describe('Consultas (10 rondas × 5)', () => {
       assert.equal(s.librasPorLata, 4);
     });
 
+    test(`ronda ${ronda}: GET /resumen/semanas?n=2&hasta= → termina en la semana elegida (y la anterior)`, async () => {
+      const r = await llamar('GET', `/resumen/semanas?n=2&hasta=${MARTES}`);
+      assert.equal(r.status, 200);
+      assert.equal(r.body.data.length, 2);
+      const [previa, elegida] = r.body.data;
+      assert.deepEqual([elegida.semana, elegida.anio], [S.semana, S.anio]);
+      assert.equal(elegida.ingresos, 180000);
+      assert.equal(elegida.kgProducidos, 100);
+      assert.equal(previa.ingresos, 0);
+      assert.ok('valorMerma' in elegida, 'falta valorMerma');
+      const malo = await llamar('GET', '/resumen/semanas?hasta=no-es-fecha');
+      assert.equal(malo.status, 400);
+      const futura = await llamar('GET', '/resumen/semanas?n=1&hasta=2999-01-01');
+      assert.deepEqual([futura.body.data[0].semana, futura.body.data[0].anio], [hoy.semana, hoy.anio]);
+    });
+
     test(`ronda ${ronda}: GET /liquidaciones/semana → cerrada, 2.190 L del ganadero, sin precio`, async () => {
       const r = await llamar('GET', `/liquidaciones/semana?semana=${S.semana}&anio=${S.anio}`);
       assert.equal(r.status, 200);
