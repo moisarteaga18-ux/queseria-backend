@@ -246,10 +246,14 @@ const cierreSemanaSchema = new mongoose.Schema({
   kgFinal: decimal({ default: 0, min: 0 }),
   // true cuando el usuario confirmó cuánto queso pasó a la semana siguiente
   confirmado: { type: Boolean, default: false },
-  mermaKg: decimal({ default: 0 }),
-  mermaPct: decimal({ default: 0 }),
-  precioPorKg: decimal({ default: 0 }),
-  valorMerma: decimal({ default: 0 })
+  // Campos del cálculo automático anterior: ya no se usan ni se escriben (se conservan los datos viejos)
+  mermaKg: decimal(),
+  mermaPct: decimal(),
+  precioPorKg: decimal(),
+  valorMerma: decimal(),
+  // Merma que registra el usuario (kg ≥ 0). Sin el campo = "Merma pendiente por registrar".
+  mermaRegistradaKg: decimal({ min: 0 }),
+  mermaRegistradaEn: { type: Date }
 }, opciones);
 cierreSemanaSchema.index({ usuarioId: 1, anio: 1, semana: 1 }, { unique: true });
 

@@ -12,10 +12,11 @@ const { LIBRAS_POR_KG, librasPorLata } = require('../utils/unidades');
 function cuentaDe(lista, { semana, anio }) {
   const { inicio, fin } = rangoSemana(semana, anio);
   const c = lista.find(s => s.semana === semana && s.anio === anio) || {
-    semana, anio, completa: true, stockInicialKg: 0, kgProducidos: 0, litrosUsados: 0, kgVendidos: 0,
+    semana, anio, completa: true, cerrada: true, mermaPendiente: false, sobranteKg: 0, mermaSugeridaKg: 0,
+    stockInicialKg: 0, kgProducidos: 0, litrosUsados: 0, kgVendidos: 0,
     kgVendidosViernesSiguiente: 0, kgPasados: 0, kgPorVender: 0, ventas: 0, litrosLeche: 0, costoLitro: 0,
-    costoLeche: 0, ganancia: 0, precioPromedioKg: null, precioRegistradoKg: null, mermaKg: 0, mermaPct: 0,
-    precioMermaKg: null, valorMerma: 0, revisar: null,
+    costoLeche: 0, ganancia: 0, precioPromedioKg: null, precioRegistradoKg: null, mermaKg: null, mermaPct: null,
+    precioMermaKg: null, valorMerma: null, revisar: null,
     viernesSiguiente: new Date(fin.getTime() + 1).toISOString().slice(0, 10)
   };
   return {
@@ -182,6 +183,12 @@ router.get('/semanas', async (req, res) => {
         mermaKg: c.mermaKg,
         mermaPct: c.mermaPct,
         valorMerma: c.valorMerma,
+        // Merma manual: cerrada sin registrar → "Merma pendiente por registrar"; sobrante = merma sugerida
+        cerrada: c.cerrada,
+        mermaPendiente: c.mermaPendiente,
+        sobranteKg: c.sobranteKg,
+        mermaSugeridaKg: c.mermaSugeridaKg,
+        kgPasados: c.kgPasados,
         // Lo que falta por cobrar (hoy) de las ventas fiadas de esa semana
         porCobrar: porCobrar.get(`${c.anio}-${c.semana}`) || 0,
         revisar: c.revisar,

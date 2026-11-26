@@ -155,7 +155,7 @@ describe('Consultas (10 rondas × 5)', () => {
       assert.equal(d.ganaderos[0].total, null);
     });
 
-    test(`ronda ${ronda}: GET /merma → semana completa con merma de 90 kg (90 %) marcada para revisar`, async () => {
+    test(`ronda ${ronda}: GET /merma → semana cerrada: sobraron 90 kg (sugerida) y la merma queda pendiente por registrar`, async () => {
       const r = await llamar('GET', '/merma');
       assert.equal(r.status, 200);
       const s = r.body.data.semanas.find(x => x.semana === S.semana && x.anio === S.anio);
@@ -163,11 +163,14 @@ describe('Consultas (10 rondas × 5)', () => {
       assert.equal(s.completa, true);
       assert.equal(s.kgProducidos, 100);
       assert.equal(s.kgVendidos, 10);
-      assert.equal(s.mermaKg, 90);
-      assert.equal(s.mermaPct, 90);
-      assert.ok(s.revisar, 'una merma de más del 15 % debe pedir revisar');
-      // Valor al precio promedio real: $ 180.000 ÷ 10 kg = $ 18.000/kg
-      assert.equal(s.valorMerma, 90 * 18000);
+      // Ya no se calcula sola: sin registrar no hay número
+      assert.equal(s.mermaKg, null);
+      assert.equal(s.valorMerma, null);
+      assert.equal(s.mermaPendiente, true);
+      assert.equal(s.sobranteKg, 90);
+      assert.equal(s.mermaSugeridaKg, 90);
+      // Precio promedio real: $ 180.000 ÷ 10 kg = $ 18.000/kg (para valorar la merma cuando se registre)
+      assert.equal(s.precioPromedioKg, 18000);
     });
   }
 });
